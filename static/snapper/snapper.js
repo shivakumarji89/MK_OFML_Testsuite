@@ -1,113 +1,148 @@
-// ── State ──────────────────────────────────────────────────────────────────
+// ── Constants ──────────────────────────────────────────────────────────────────
 const WARN_LIMIT = 200;
 const ERROR_LIMIT = 500;
-let rangeData = null;  // {articles, properties, values}
-let queue = [];        // [{name, selectedArticles, selectedProperties, count}]
 
-// ── DOM refs ───────────────────────────────────────────────────────────────
-const repoPath = document.getElementById('repoPath');
-const mfrSelect = document.getElementById('mfrSelect');
-const rangeSelect = document.getElementById('rangeSelect');
-const loadBtn = document.getElementById('loadBtn');
+// ── State ──────────────────────────────────────────────────────────────────────
+let currentSeed = null;    // Response from /parse-seed
+let hierarchyModes = {};   // {child_prop_name: "first"|"distribute"}
+let queue = [];            // [{label, article, articleClass, propertyToClass,
+                           //   propValToClass, selectedProperties, count}]
+
+// ── DOM refs ───────────────────────────────────────────────────────────────────
+const repoPathInput = document.getElementById('repoPath');
+const seedFileInput = document.getElementById('seedFile');
+const parseSeedBtn = document.getElementById('parseSeedBtn');
+const seedStatus = document.getElementById('seedStatus');
+const seedInfo = document.getElementById('seedInfo');
+const seedInfoText = document.getElementById('seedInfoText');
 const dimensionArea = document.getElementById('dimensionArea');
 const dimensionColumns = document.getElementById('dimensionColumns');
 const emptyState = document.getElementById('emptyState');
 const permCount = document.getElementById('permCount');
-const genName = document.getElementById('genName');
+const articleLabel = document.getElementById('articleLabel');
 const addToQueueBtn = document.getElementById('addToQueueBtn');
 const queueList = document.getElementById('queueList');
 const generateAllBtn = document.getElementById('generateAllBtn');
+const generateStatus = document.getElementById('generateStatus');
 
-// ── Persist repo path ──────────────────────────────────────────────────────
-repoPath.value = localStorage.getItem('repoPath') || '';
-
-repoPath.addEventListener('change', async () => {
-  localStorage.setItem('repoPath', repoPath.value.trim());
-  await loadRanges();
+// ── Persist repo path ──────────────────────────────────────────────────────────
+repoPathInput.value = localStorage.getItem('repoPath') || '';
+repoPathInput.addEventListener('input', () => {
+  localStorage.setItem('repoPath', repoPathInput.value.trim());
 });
 
-// ── Load ranges from API ───────────────────────────────────────────────────
-async function loadRanges() {
-  const repo = repoPath.value.trim();
-  if (!repo) return;
-  const res = await fetch(`/api/snapper/ranges?repo=${encodeURIComponent(repo)}`);
-  if (!res.ok) return;
-  const ranges = await res.json();
+// ── Seed file input ────────────────────────────────────────────────────────────
+seedFileInput.addEventListener('change', () => {
+  parseSeedBtn.disabled = !seedFileInput.files.length || !repoPathInput.value.trim();
+});
 
-  // Populate manufacturer dropdown
-  const mfrs = [...new Set(ranges.map(r => r.manufacturer))].sort();
-  mfrSelect.innerHTML = '<option value="">—</option>' +
-    mfrs.map(m => `<option value="${m}">${m}</option>`).join('');
-  mfrSelect.disabled = false;
+repoPathInput.addEventListener('input', () => {
+  parseSeedBtn.disabled = !seedFileInput.files.length || !repoPathInput.value.trim();
+});
 
-  mfrSelect.addEventListener('change', () => {
-    const selectedMfr = mfrSelect.value;
-    const filtered = ranges.filter(r => r.manufacturer === selectedMfr);
-    rangeSelect.innerHTML = '<option value="">—</option>' +
-      filtered.map(r => `<option value="${r.range}">${r.range}</option>`).join('');
-    rangeSelect.disabled = false;
-    rangeSelect.addEventListener('change', () => {
-      loadBtn.disabled = !rangeSelect.value;
-    });
-  });
-}
+// ── Parse Seed ────────────────────────────────────────────────────────────────
+parseSeedBtn.addEventListener('click', async () => {
+  const file = seedFileInput.files[0];
+  if (!file) return;
+  const repo = repoPathInput.value.trim();
+  if (!repo) { alert('Please enter the repository path first.'); return; }
 
-if (repoPath.value) loadRanges();
+  parseSeedBtn.disabled = true;
+  seedStatus.textContent = 'Parsing…';
 
-// ── Load range data ────────────────────────────────────────────────────────
-loadBtn.addEventListener('click', async () => {
-  const repo = repoPath.value.trim();
-  const mfr = mfrSelect.value;
-  const range = rangeSelect.value;
-  const res = await fetch(
-    `/api/snapper/range?repo=${encodeURIComponent(repo)}&manufacturer=${mfr}&range=${range}`
-  );
-  if (!res.ok) { alert('Failed to load range'); return; }
-  rangeData = await res.json();
-  renderDimensions();
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('repo', repo);
+
+  let response;
+  try {
+    response = await fetch('/api/snapper/parse-seed', { method: 'POST', body: formData });
+  } catch (err) {
+    seedStatus.textContent = `Network error: ${err.message}`;
+    parseSeedBtn.disabled = false;
+    return;
+  }
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Unknown error' }));
+    seedStatus.textContent = `Error: ${err.detail}`;
+    parseSeedBtn.disabled = false;
+    return;
+  }
+
+  currentSeed = await response.json();
+  hierarchyModes = {};
+  // Default mode for each child property: "first"
+  for (const col of currentSeed.property_columns) {
+    if (col.is_child) {
+      hierarchyModes[col.name] = 'first';
+    }
+  }
+
+  seedStatus.textContent = '';
+  parseSeedBtn.disabled = false;
+
+  // Show article info
+  seedInfo.classList.remove('hidden');
+  seedInfoText.textContent =
+    `Article: ${currentSeed.article} · Manufacturer: ${currentSeed.manufacturer} · Series: ${currentSeed.series} · ${currentSeed.property_columns.length} properties`;
+
+  // Show dimension columns
   emptyState.classList.add('hidden');
   dimensionArea.classList.remove('hidden');
+  renderDimensions();
   addToQueueBtn.disabled = false;
 });
 
 // ── Render dimension columns ───────────────────────────────────────────────
 function renderDimensions() {
   dimensionColumns.innerHTML = '';
+  if (!currentSeed) return;
 
-  // Articles column
-  const articleCodes = rangeData.articles.map(a => a.code);
-  dimensionColumns.appendChild(renderColumn('Articles', articleCodes, 'article'));
-
-  // Property columns — one per unique property name
-  const propMap = {};
-  for (const v of rangeData.values) {
-    if (!propMap[v.property_name]) propMap[v.property_name] = [];
-    if (!propMap[v.property_name].includes(v.value)) {
-      propMap[v.property_name].push(v.value);
+  // Build a map of parent → child hierarchy info
+  const childProps = new Map(); // child_name → {parent, mapping}
+  const parentHasChild = new Map(); // parent_name → child_name
+  for (const col of currentSeed.property_columns) {
+    if (col.is_child) {
+      childProps.set(col.name, { parent: col.parent, mapping: col.mapping });
+      parentHasChild.set(col.parent, col.name);
     }
   }
 
-  // Sort by sort_order from properties list
-  const propOrder = {};
-  for (const p of rangeData.properties) {
-    if (!propOrder[p.name]) propOrder[p.name] = p.sort_order;
-  }
-  const sortedProps = Object.keys(propMap).sort(
-    (a, b) => (propOrder[a] || 999) - (propOrder[b] || 999)
-  );
+  for (const col of currentSeed.property_columns) {
+    if (col.is_child) continue; // Child props are rendered as a sub-control of parent
 
-  for (const propName of sortedProps) {
-    dimensionColumns.appendChild(renderColumn(propName, propMap[propName], `prop_${propName}`));
+    const colEl = renderPropertyColumn(col, parentHasChild.get(col.name) || null, col.name);
+    dimensionColumns.appendChild(colEl);
   }
 
   updatePermCount();
 }
 
-function renderColumn(label, values, key) {
+function renderPropertyColumn(col, childPropName, propName) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'flex flex-col gap-1';
+
+  // Main checkbox column
+  const colEl = _buildCheckboxColumn(propName, col.values, col.seed_value);
+  wrapper.appendChild(colEl);
+
+  // If this property has a child (colour), add mode toggle below
+  if (childPropName) {
+    const modeEl = _buildHierarchyModeControl(childPropName);
+    wrapper.appendChild(modeEl);
+  }
+
+  return wrapper;
+}
+
+function _buildCheckboxColumn(propName, values, seedValue) {
   const col = document.createElement('div');
-  col.className = 'bg-white rounded-lg shadow p-3 min-w-36 max-w-48 flex flex-col';
+  col.className = 'bg-white rounded-lg shadow p-3 min-w-44 max-w-56 flex flex-col';
+  col.dataset.propName = propName;
+
   col.innerHTML = `
-    <div class="font-semibold text-sm text-gray-700 mb-2 border-b pb-1">${label}</div>
+    <div class="font-semibold text-sm text-gray-700 mb-2 border-b pb-1" title="${propName}">${propName}</div>
     <div class="flex gap-1 mb-2">
       <button class="text-xs text-blue-600 hover:underline select-all-btn">All</button>
       <span class="text-gray-300">|</span>
@@ -116,18 +151,21 @@ function renderColumn(label, values, key) {
     <div class="overflow-y-auto max-h-64 space-y-1">
       ${values.map(v => `
         <label class="flex items-center gap-1 text-xs text-gray-700 cursor-pointer">
-          <input type="checkbox" class="dim-check" data-key="${key}" data-value="${v}" checked>
-          <span>${v}</span>
+          <input type="checkbox" class="dim-check" data-prop="${propName}" data-value="${v.code}"
+            ${v.code === seedValue ? 'checked' : ''}>
+          <span class="font-mono text-gray-500">${v.code}</span>
+          ${v.label && v.label !== v.code ? `<span class="text-gray-300">·</span><span class="truncate">${v.label}</span>` : ''}
         </label>
       `).join('')}
     </div>
   `;
+
   col.querySelector('.select-all-btn').addEventListener('click', () => {
-    col.querySelectorAll('.dim-check').forEach(cb => cb.checked = true);
+    col.querySelectorAll('.dim-check').forEach(cb => { cb.checked = true; });
     updatePermCount();
   });
   col.querySelector('.select-none-btn').addEventListener('click', () => {
-    col.querySelectorAll('.dim-check').forEach(cb => cb.checked = false);
+    col.querySelectorAll('.dim-check').forEach(cb => { cb.checked = false; });
     updatePermCount();
   });
   col.querySelectorAll('.dim-check').forEach(cb =>
@@ -136,61 +174,149 @@ function renderColumn(label, values, key) {
   return col;
 }
 
-// ── Permutation count ──────────────────────────────────────────────────────
-function getSelections() {
-  const articles = [];
-  const properties = {};
+function _buildHierarchyModeControl(childPropName) {
+  const el = document.createElement('div');
+  el.className = 'bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-800';
+  el.dataset.childProp = childPropName;
 
-  document.querySelectorAll('.dim-check:checked').forEach(cb => {
-    const key = cb.dataset.key;
-    const val = cb.dataset.value;
-    if (key === 'article') {
-      articles.push(val);
-    } else {
-      const propName = key.replace(/^prop_/, '');
-      if (!properties[propName]) properties[propName] = [];
-      properties[propName].push(val);
-    }
+  const currentMode = hierarchyModes[childPropName] || 'first';
+  el.innerHTML = `
+    <div class="font-semibold mb-1">${childPropName}</div>
+    <div class="text-gray-500 mb-1 text-xs">Colour assignment:</div>
+    <div class="flex gap-1">
+      <button class="mode-btn px-2 py-0.5 rounded text-xs border ${currentMode === 'first' ? 'bg-amber-600 text-white border-amber-600' : 'bg-white border-gray-300 text-gray-700'}"
+        data-mode="first" data-child="${childPropName}">First only</button>
+      <button class="mode-btn px-2 py-0.5 rounded text-xs border ${currentMode === 'distribute' ? 'bg-amber-600 text-white border-amber-600' : 'bg-white border-gray-300 text-gray-700'}"
+        data-mode="distribute" data-child="${childPropName}">Distribute</button>
+    </div>
+  `;
+
+  el.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      hierarchyModes[childPropName] = btn.dataset.mode;
+      // Re-render just this control
+      el.querySelectorAll('.mode-btn').forEach(b => {
+        const active = b.dataset.mode === btn.dataset.mode;
+        b.className = `mode-btn px-2 py-0.5 rounded text-xs border ${active ? 'bg-amber-600 text-white border-amber-600' : 'bg-white border-gray-300 text-gray-700'}`;
+      });
+    });
   });
-  return { articles, properties };
+  return el;
 }
 
-function countPermutations(articles, properties) {
-  if (articles.length === 0) return 0;
-  const propCounts = Object.values(properties).map(v => v.length);
-  const propProduct = propCounts.reduce((a, b) => a * b, 1);
-  return articles.length * propProduct;
+// ── Permutation counter ────────────────────────────────────────────────────────
+function getParentSelections() {
+  // Returns {propName: [selectedValues]} for non-child properties only
+  const selections = {};
+  document.querySelectorAll('.dim-check:checked').forEach(cb => {
+    const prop = cb.dataset.prop;
+    if (!selections[prop]) selections[prop] = [];
+    selections[prop].push(cb.dataset.value);
+  });
+  return selections;
+}
+
+function computePermCount(parentSelections) {
+  const counts = Object.values(parentSelections).map(v => v.length);
+  if (counts.length === 0) return 0;
+  return counts.reduce((a, b) => a * b, 1);
 }
 
 function updatePermCount() {
-  const { articles, properties } = getSelections();
-  const count = countPermutations(articles, properties);
+  const sel = getParentSelections();
+  const count = computePermCount(sel);
   permCount.textContent = `${count.toLocaleString()} permutations`;
-  permCount.className = 'mt-4 text-sm font-medium ' + (
+  permCount.className = 'text-sm font-medium ' + (
     count > ERROR_LIMIT ? 'text-red-600' :
     count > WARN_LIMIT  ? 'text-amber-600' :
                           'text-gray-700'
   );
   if (count > ERROR_LIMIT) {
-    permCount.textContent += ` ⚠ Consider splitting into multiple files (suggested max: ${ERROR_LIMIT})`;
+    permCount.textContent += ` ⚠ Consider splitting (suggested max: ${ERROR_LIMIT})`;
   }
 }
 
-// ── Queue ──────────────────────────────────────────────────────────────────
+// ── Resolve child property values ──────────────────────────────────────────────
+function resolveChildValues(parentSelections) {
+  // For each child property, resolve which values to include based on mode
+  // Returns: {child_prop_name: [resolved_values]} to merge into selectedProperties
+  if (!currentSeed) return {};
+  const childAssignments = {};
+
+  const childCols = currentSeed.property_columns.filter(c => c.is_child);
+  for (const childCol of childCols) {
+    const parentVals = parentSelections[childCol.parent] || [];
+    const mode = hierarchyModes[childCol.name] || 'first';
+    const mapping = childCol.mapping || {};
+    const resolved = [];
+
+    if (mode === 'first') {
+      for (const pv of parentVals) {
+        const children = mapping[pv] || [];
+        if (children.length > 0) resolved.push(children[0]);
+      }
+    } else {
+      // distribute: cycle through children for each parent value
+      const counters = {};
+      for (const pv of parentVals) {
+        const children = mapping[pv] || [];
+        if (children.length === 0) continue;
+        const n = counters[pv] || 0;
+        resolved.push(children[n % children.length]);
+        counters[pv] = n + 1;
+      }
+    }
+
+    if (resolved.length > 0) {
+      childAssignments[childCol.name] = resolved;
+    }
+  }
+  return childAssignments;
+}
+
+// ── Build property_to_class and prop_val_to_class from seed ──────────────────
+function buildClassMaps() {
+  // property_to_class: {prop_name: article_class} — from seed
+  // prop_val_to_class: {"PropName=Value": article_class} — for all values loaded
+  if (!currentSeed) return { propertyToClass: {}, propValToClass: {} };
+
+  const propertyToClass = {};
+  const propValToClass = {};
+
+  for (const col of currentSeed.property_columns) {
+    propertyToClass[col.name] = col.article_class;
+    for (const v of col.values) {
+      propValToClass[`${col.name}=${v.code}`] = col.article_class;
+    }
+  }
+  return { propertyToClass, propValToClass };
+}
+
+// ── Add to queue ──────────────────────────────────────────────────────────────
 addToQueueBtn.addEventListener('click', () => {
-  const name = genName.value.trim() || `Generation ${queue.length + 1}`;
-  const { articles, properties } = getSelections();
-  const count = countPermutations(articles, properties);
+  if (!currentSeed) return;
+
+  const parentSelections = getParentSelections();
+  const childResolved = resolveChildValues(parentSelections);
+  const selectedProperties = { ...parentSelections, ...childResolved };
+
+  const count = computePermCount(parentSelections);
+  const label = articleLabel.value.trim() || currentSeed.article;
+  const { propertyToClass, propValToClass } = buildClassMaps();
+
   queue.push({
-    name,
-    selectedArticles: articles,
-    selectedProperties: properties,
+    label,
+    article: currentSeed.article,
+    articleClass: currentSeed.property_columns[0]?.article_class || '',
+    propertyToClass,
+    propValToClass,
+    selectedProperties,
     count,
-    repo: repoPath.value.trim(),
-    manufacturer: mfrSelect.value,
-    range: rangeSelect.value,
+    manufacturer: currentSeed.manufacturer,
+    series: currentSeed.series,
   });
-  genName.value = '';
+
+  articleLabel.value = '';
   renderQueue();
 });
 
@@ -202,13 +328,13 @@ function renderQueue() {
     card.className = 'bg-gray-50 border rounded p-2 text-xs';
     card.innerHTML = `
       <div class="flex justify-between items-start">
-        <span class="font-semibold text-gray-800">${entry.name}</span>
-        <button class="text-red-500 hover:text-red-700 ml-2" data-idx="${i}">✕</button>
+        <span class="font-semibold text-gray-800">${entry.label}</span>
+        <button class="text-red-500 hover:text-red-700 ml-2 remove-btn" data-idx="${i}">✕</button>
       </div>
-      <div class="text-gray-500 mt-1">${entry.count.toLocaleString()} permutations</div>
-      <div class="text-gray-400">${entry.selectedArticles.length} articles · ${Object.keys(entry.selectedProperties).length} props</div>
+      <div class="text-gray-600 mt-0.5">Article: ${entry.article}</div>
+      <div class="text-gray-500 mt-0.5">${entry.count.toLocaleString()} permutations · ${Object.keys(entry.selectedProperties).length} props</div>
     `;
-    card.querySelector('button').addEventListener('click', (e) => {
+    card.querySelector('.remove-btn').addEventListener('click', (e) => {
       queue.splice(parseInt(e.target.dataset.idx), 1);
       renderQueue();
     });
@@ -217,39 +343,70 @@ function renderQueue() {
   generateAllBtn.disabled = queue.length === 0;
 }
 
-// ── Generate all ───────────────────────────────────────────────────────────
+// ── Generate All ──────────────────────────────────────────────────────────
 generateAllBtn.addEventListener('click', async () => {
+  if (queue.length === 0) return;
+
   generateAllBtn.disabled = true;
   generateAllBtn.textContent = 'Generating…';
+  generateStatus.classList.remove('hidden');
+  generateStatus.textContent = '';
 
-  for (const entry of queue) {
-    const payload = {
-      repo: entry.repo,
-      manufacturer: entry.manufacturer,
-      range: entry.range,
-      selected_articles: entry.selectedArticles,
-      selected_properties: entry.selectedProperties,
-      filename: `${entry.name.replace(/\s+/g, '_')}.obx`,
-    };
-    const res = await fetch('/api/snapper/generate', {
+  // All items must share the same manufacturer and series (they're per-article queues)
+  // Use the first item's manufacturer/series (they should all match if from same range)
+  const manufacturer = queue[0].manufacturer;
+  const series = queue[0].series;
+
+  const queuePayload = queue.map(entry => ({
+    article: entry.article,
+    article_class: entry.articleClass,
+    property_to_class: entry.propertyToClass,
+    prop_val_to_class: entry.propValToClass,
+    selected_properties: entry.selectedProperties,
+  }));
+
+  const payload = {
+    manufacturer,
+    series,
+    queue: queuePayload,
+    filename: `snapper_${series}.obx`,
+  };
+
+  let response;
+  try {
+    response = await fetch('/api/snapper/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) {
-      alert(`Failed to generate: ${entry.name}`);
-      continue;
-    }
-    // Trigger browser download
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = payload.filename;
-    a.click();
-    URL.revokeObjectURL(url);
+  } catch (err) {
+    generateStatus.textContent = `Network error: ${err.message}`;
+    generateAllBtn.disabled = false;
+    generateAllBtn.textContent = 'Generate All';
+    return;
   }
 
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Unknown error' }));
+    generateStatus.textContent = `Error: ${err.detail}`;
+    generateAllBtn.disabled = false;
+    generateAllBtn.textContent = 'Generate All';
+    return;
+  }
+
+  // Trigger download
+  const contentType = response.headers.get('content-type') || '';
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = contentType.includes('zip')
+    ? `snapper_${series}.zip`
+    : `snapper_${series}.obx`;
+  a.click();
+  URL.revokeObjectURL(url);
+
+  generateStatus.textContent = 'Downloaded.';
   generateAllBtn.disabled = false;
   generateAllBtn.textContent = 'Generate All';
 });
