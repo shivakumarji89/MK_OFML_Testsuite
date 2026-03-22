@@ -2,6 +2,16 @@
 const WARN_LIMIT = 200;
 const ERROR_LIMIT = 500;
 
+// ── HTML safety ────────────────────────────────────────────────────────────────
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // ── State ──────────────────────────────────────────────────────────────────────
 let currentSeed = null;    // Response from /parse-seed
 let hierarchyModes = {};   // {child_prop_name: "first"|"distribute"}
@@ -142,7 +152,7 @@ function _buildCheckboxColumn(propName, values, seedValue) {
   col.dataset.propName = propName;
 
   col.innerHTML = `
-    <div class="font-semibold text-sm text-gray-700 mb-2 border-b pb-1" title="${propName}">${propName}</div>
+    <div class="font-semibold text-sm text-gray-700 mb-2 border-b pb-1" title="${escapeHtml(propName)}">${escapeHtml(propName)}</div>
     <div class="flex gap-1 mb-2">
       <button class="text-xs text-blue-600 hover:underline select-all-btn">All</button>
       <span class="text-gray-300">|</span>
@@ -151,10 +161,10 @@ function _buildCheckboxColumn(propName, values, seedValue) {
     <div class="overflow-y-auto max-h-64 space-y-1">
       ${values.map(v => `
         <label class="flex items-center gap-1 text-xs text-gray-700 cursor-pointer">
-          <input type="checkbox" class="dim-check" data-prop="${propName}" data-value="${v.code}"
+          <input type="checkbox" class="dim-check" data-prop="${escapeHtml(propName)}" data-value="${escapeHtml(v.code)}"
             ${v.code === seedValue ? 'checked' : ''}>
-          <span class="font-mono text-gray-500">${v.code}</span>
-          ${v.label && v.label !== v.code ? `<span class="text-gray-300">·</span><span class="truncate">${v.label}</span>` : ''}
+          <span class="font-mono text-gray-500">${escapeHtml(v.code)}</span>
+          ${v.label && v.label !== v.code ? `<span class="text-gray-300">·</span><span class="truncate">${escapeHtml(v.label)}</span>` : ''}
         </label>
       `).join('')}
     </div>
@@ -181,13 +191,13 @@ function _buildHierarchyModeControl(childPropName) {
 
   const currentMode = hierarchyModes[childPropName] || 'first';
   el.innerHTML = `
-    <div class="font-semibold mb-1">${childPropName}</div>
+    <div class="font-semibold mb-1">${escapeHtml(childPropName)}</div>
     <div class="text-gray-500 mb-1 text-xs">Colour assignment:</div>
     <div class="flex gap-1">
       <button class="mode-btn px-2 py-0.5 rounded text-xs border ${currentMode === 'first' ? 'bg-amber-600 text-white border-amber-600' : 'bg-white border-gray-300 text-gray-700'}"
-        data-mode="first" data-child="${childPropName}">First only</button>
+        data-mode="first" data-child="${escapeHtml(childPropName)}">First only</button>
       <button class="mode-btn px-2 py-0.5 rounded text-xs border ${currentMode === 'distribute' ? 'bg-amber-600 text-white border-amber-600' : 'bg-white border-gray-300 text-gray-700'}"
-        data-mode="distribute" data-child="${childPropName}">Distribute</button>
+        data-mode="distribute" data-child="${escapeHtml(childPropName)}">Distribute</button>
     </div>
   `;
 
@@ -328,10 +338,10 @@ function renderQueue() {
     card.className = 'bg-gray-50 border rounded p-2 text-xs';
     card.innerHTML = `
       <div class="flex justify-between items-start">
-        <span class="font-semibold text-gray-800">${entry.label}</span>
+        <span class="font-semibold text-gray-800">${escapeHtml(entry.label)}</span>
         <button class="text-red-500 hover:text-red-700 ml-2 remove-btn" data-idx="${i}">✕</button>
       </div>
-      <div class="text-gray-600 mt-0.5">Article: ${entry.article}</div>
+      <div class="text-gray-600 mt-0.5">Article: ${escapeHtml(entry.article)}</div>
       <div class="text-gray-500 mt-0.5">${entry.count.toLocaleString()} permutations · ${Object.keys(entry.selectedProperties).length} props</div>
     `;
     card.querySelector('.remove-btn').addEventListener('click', (e) => {
