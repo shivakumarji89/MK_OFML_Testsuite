@@ -1,0 +1,82 @@
+# OFML Testsuite — Project Context
+
+## What this project is
+
+A local web application for QA verification of OFML data (Office Furniture Markup Language, used by pCon configurators). Built for the MillerKnoll QA team.
+
+The app is a suite of QA modules, each on its own page, linked from a dashboard home. The first module is the **Snapper File Generator**.
+
+### Snapper File Generator — how it works
+
+1. Export a single configured product from pCon Planner as an OBX file (the **seed**).
+2. Upload the seed at `/snapper/`. The backend parses the varcode to extract the article, series, and property names, then loads valid values from OCD.
+3. Each property appears as a checkbox column. Parent-child property pairs (e.g. fabric type → fabric colour) are detected automatically — the colour column is replaced by a mode toggle ("First only" or "Distribute") below the parent.
+4. Select values, optionally label the article, then click **Add to Queue**. Repeat for other articles in the same range.
+5. Click **Generate All** to download a single OBX (one article) or a zip of OBX files (multiple articles). Import into pCon and run **Update** to resolve prices and descriptions.
+
+## Key repositories
+
+**OFML SVN repository root:**
+`C:\HermanMillerOFMLSVN\Staging\HermanMiller\_repository`
+
+Manufacturer folder: `hmx`
+Example ranges: `cosm`, `cloud`, `pullman`, `always`, `ratio_rebuild`
+
+OCD source files for a range live at:
+`{repo_root}/{manufacturer}/{range}/ANY/1/db/`
+
+## Design spec
+
+Full design: `Docs/superpowers/specs/2026-03-22-ofml-testsuite-design.md`
+
+## Tech stack
+
+- Python + FastAPI backend
+- Vanilla HTML + JS frontend (no build step, no npm)
+- Tailwind CSS from CDN
+- Run: `python main.py` → open `localhost:8080`
+
+## Key domain concepts
+
+- **OBX file:** pCon's proprietary XML export format. Contains `<bskArticle>` entries, each representing a configured product.
+- **ofmlvarcode:** The key field in an OBX entry. Format: `ArticleClass.PropertyName=Value;...`. Drives pCon's configuration resolution.
+- **Snapper file:** A team term for an OBX file containing one entry per product configuration, used for QA comparison against PDM data.
+- **Seed OBX:** A single-article OBX exported from pCon, used as input to the Snapper Generator to drive property discovery.
+- **Update (pCon):** A pCon Planner function that re-resolves all configurations in an imported OBX and fills in prices, article codes, descriptions.
+- **OCD article class:** Groups of articles sharing the same property set (e.g. `COSM_NORMAL`, `CLOUD_OPT`). The class name is used as the varcode prefix.
+- **Hierarchy:** A parent-child property relationship where child values are conditioned on parent values (e.g. `Shell_Fabric_Colour` is conditioned on `Shell_Fabric_Type`). Detected automatically from `ocd_relation.csv` + `ocd_relationobj.csv`.
+
+## Module structure
+
+```
+modules/snapper/
+  seed_parser.py   — parses uploaded OBX seed file, extracts article/series/properties from varcode
+  reader.py        — discovers ranges in the repo, loads OCD CSV data (articles, properties, values, relations)
+  hierarchy.py     — detects parent-child property pairs from OCD relation expressions
+  generator.py     — computes permutations, builds OBX XML with per-property article class prefixes
+  routes.py        — FastAPI routes: POST /api/snapper/parse-seed, POST /api/snapper/generate
+static/snapper/
+  index.html       — seed upload UI, property columns, queue sidebar
+  snapper.js       — all frontend logic: seed parsing, column rendering, hierarchy modes, queue, download
+```
+
+## API
+
+**POST `/api/snapper/parse-seed`** — multipart: `file` (OBX) + `repo` (path string)
+Returns: `{ article, manufacturer, series, repo, db_path, property_columns }`
+Each column: `{ name, article_class, seed_value, values, is_child, parent, mapping }`
+
+**POST `/api/snapper/generate`** — JSON: `{ manufacturer, series, queue, filename }`
+Each queue item: `{ article, article_class, property_to_class, prop_val_to_class, selected_properties }`
+Returns: XML (single item) or ZIP (multiple items)
+
+## OFML documentation
+
+Reference docs are in `Docs/`. The most relevant:
+- `ocd_4.3_en.md` — OCD data model, property/value/relation tables
+- `AN-2014-04_OCD_Features-EN.md` — OCD features and conditions
+
+## Known limitations
+
+- Hierarchy detection requires ALL values of a property to be conditioned on the same parent. In some ranges (e.g. CLOUD), fabric colour values have mixed condition types (`*`-prefixed or `$`-prefixed expressions), which prevents automatic detection. In that case the colour column renders as a normal checkbox column.
+- Varcode prefix is the OCD article class name, read directly from the seed's varcode — no lookup needed.
