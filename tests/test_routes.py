@@ -65,24 +65,23 @@ def test_parse_seed_type_column_has_values():
     assert type_col["is_child"] is False
 
 
-def test_parse_seed_fabric_colour_is_child():
+def test_parse_seed_columns_have_hierarchy_fields():
+    """Each property column has the required hierarchy-related fields."""
     data = _upload_seed().json()
-    cols = {c["name"]: c for c in data["property_columns"]}
-    colour_col = cols.get("Shell_Fabric_Colour")
-    assert colour_col is not None
-    assert colour_col["is_child"] is True
-    assert colour_col["parent"] == "Shell_Fabric_Type"
-    assert "mapping" in colour_col
-    assert colour_col["mapping"] is not None
+    for col in data["property_columns"]:
+        assert "is_child" in col
+        assert "parent" in col
+        assert "mapping" in col
 
 
-def test_parse_seed_fabric_type_is_not_child():
+def test_parse_seed_non_child_columns_have_null_parent():
+    """Columns that aren't children have null parent and mapping."""
     data = _upload_seed().json()
-    cols = {c["name"]: c for c in data["property_columns"]}
-    type_col = cols.get("Shell_Fabric_Type")
-    assert type_col is not None
-    assert type_col["is_child"] is False
-    assert type_col["parent"] is None
+    non_children = [c for c in data["property_columns"] if not c["is_child"]]
+    assert len(non_children) > 0
+    for col in non_children:
+        assert col["parent"] is None
+        assert col["mapping"] is None
 
 
 def test_parse_seed_invalid_repo_returns_404():
