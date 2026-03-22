@@ -52,11 +52,38 @@ def build_varcode(article_class: str, properties: dict[str, str]) -> str:
     return ";".join(parts)
 
 
+def build_varcode_multi(
+    properties: dict[str, str],
+    property_to_class: dict[str, str],
+    prop_val_to_class: dict[tuple, str] | None = None,
+) -> str:
+    """
+    Build an OFML varcode with per-property article class prefixes.
+
+    Each property may have a different article class prefix.
+    Lookup order: prop_val_to_class[(prop, val)] first, then property_to_class[prop].
+
+    Example output: "CLOUD_ATTR_ARM_CHAIR.Type=10;CLOUD_OPT.Base_Finish=R00"
+    """
+    parts = []
+    for prop_name, value in properties.items():
+        cls = None
+        if prop_val_to_class:
+            cls = prop_val_to_class.get((prop_name, value))
+        if cls is None:
+            cls = property_to_class.get(prop_name, "")
+        if cls and prop_name:
+            parts.append(f"{cls}.{prop_name}={value}")
+    return ";".join(parts)
+
+
 def build_obx(
     permutations: list[dict],
     article_class_map: dict[str, str],
     manufacturer_code: str,
     series_code: str,
+    property_to_class: dict[str, str] | None = None,
+    prop_val_to_class: dict[tuple, str] | None = None,
 ) -> str:
     """
     Build an OBX XML document from a list of permutations.
@@ -66,6 +93,8 @@ def build_obx(
         article_class_map: {article_code: article_class} — from OCD artbase data
         manufacturer_code: e.g. "HM" — from ocd_article.csv col[2]
         series_code: e.g. "COSM" — from ocd_article.csv col[3]
+        property_to_class: optional {prop_name: article_class} for per-property prefixes
+        prop_val_to_class: optional {(prop_name, value): article_class} for finer-grained lookup
 
     Returns:
         Pretty-printed XML string.
@@ -105,8 +134,13 @@ def build_obx(
         base_artnr = SubElement(basket_article, "artNr", type="base")
         base_artnr.text = article_code
 
-        if properties and article_class:
-            varcode = build_varcode(article_class, properties)
+        if properties:
+            if property_to_class is not None:
+                varcode = build_varcode_multi(properties, property_to_class, prop_val_to_class)
+            elif article_class:
+                varcode = build_varcode(article_class, properties)
+            else:
+                varcode = ""
             if varcode:
                 varcode_el = SubElement(basket_article, "artNr", type="ofmlvarcode")
                 varcode_el.text = varcode

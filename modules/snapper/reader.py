@@ -90,21 +90,39 @@ def load_range_data(db_path: str) -> dict:
             "relation_id": row[4].strip(),
         })
 
+    # --- ocd_propvaluetext.csv: build value_id → English label map ---
+    label_map: dict[str, str] = {}
+    text_path = db / "ocd_propvaluetext.csv"
+    if text_path.exists():
+        for row in _read_csv(str(text_path)):
+            if len(row) < 5:
+                continue
+            if row[1].strip().lower() != "en":
+                continue
+            value_id = row[0].strip()
+            label = row[4].strip().strip('"')
+            if value_id and value_id not in label_map:
+                label_map[value_id] = label
+
     # --- ocd_propertyvalue.csv ---
-    # Value is always the LAST column (column index -1)
+    # The value code sits at col[8]; trailing semicolons produce empty columns
+    # after it so row[-1] is unreliable — take the last non-empty column instead.
     value_rows = _read_csv(str(db / "ocd_propertyvalue.csv"))
     values = []
     for row in value_rows:
         if len(row) < 6:
             continue
+        value_id = row[3].strip()
+        value_code = next((c.strip() for c in reversed(row) if c.strip()), "")
         values.append({
             "article_class": row[0].strip(),
             "property_name": row[1].strip(),
             "sort_order": int(row[2].strip()) if row[2].strip().isdigit() else 0,
-            "value_id": row[3].strip(),
+            "value_id": value_id,
             "relation_id": row[4].strip(),
             "is_default": row[5].strip() == "1",
-            "value": row[-1].strip(),
+            "value": value_code,
+            "label": label_map.get(value_id, value_code),
         })
 
     # --- ocd_relation.csv: build full expression per relation_id ---
