@@ -470,6 +470,7 @@ async function _doGenerate(items, filename) {
       prop_val_to_class: e.propValToClass,
       selected_properties: e.selectedProperties,
       child_resolutions: e.childResolutions || {},
+      filename: e.filename,
     })),
   };
 

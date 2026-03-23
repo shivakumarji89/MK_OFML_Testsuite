@@ -181,6 +181,7 @@ class QueueItem(BaseModel):
     prop_val_to_class: dict[str, str]
     selected_properties: dict[str, list[str]]   # parent-only dimensions
     child_resolutions: dict[str, ChildResolution] = {}  # {child_prop: resolution}
+    filename: str = ""  # desired filename for this item inside the zip
 
 
 class GenerateRequest(BaseModel):
@@ -241,8 +242,8 @@ def generate_obx(req: GenerateRequest):
                 item.property_to_class,
                 pvtc,
             )
-        safe_name = item.article.replace("/", "_").replace("\\", "_")
-        obx_files.append((f"{safe_name}.obx", xml_content))
+        entry_name = item.filename if item.filename else f"{item.article.replace('/', '_').replace(chr(92), '_')}.obx"
+        obx_files.append((entry_name, xml_content))
 
     if len(obx_files) == 1:
         filename, xml_content = obx_files[0]
