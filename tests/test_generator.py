@@ -1,6 +1,7 @@
 import pytest
 import xml.etree.ElementTree as ET
 from modules.snapper.generator import compute_permutations, build_varcode, build_obx
+from modules.snapper.generator import build_obx_from_seed, SENTINEL
 
 
 def test_compute_permutations_single_dimension():
@@ -91,3 +92,66 @@ def test_build_obx_empty_properties():
     artnrs = {a.get("type"): a.text for a in article.findall("artNr")}
     assert "base" in artnrs
     assert "ofmlvarcode" not in artnrs
+
+
+# ── Sentinel tests ─────────────────────────────────────────────────────────────
+
+_SEED_NO_FINAL = """<?xml version='1.0'?>
+<cutBuffer>
+  <state sessionId='s'/>
+  <versionInfo vendorKey='EasternGraphics' appKey='EAI-Server' appVersion='4.18.3' bskXmlVersion='1.8.10'/>
+  <items>
+    <bskArticle basketId='bid-1' itemType='BasketArticle' updateState='UpToDate'>
+      <manufacturer id='HM'/>
+      <series id='TEST'/>
+      <artNr type='base'>T01</artNr>
+      <artNr type='ofmlvarcode'>TC.Prop=Val</artNr>
+    </bskArticle>
+  </items>
+</cutBuffer>"""
+
+_SEED_WITH_FINAL = """<?xml version='1.0'?>
+<cutBuffer>
+  <state sessionId='s'/>
+  <versionInfo vendorKey='EasternGraphics' appKey='EAI-Server' appVersion='4.18.3' bskXmlVersion='1.8.10'/>
+  <items>
+    <bskArticle basketId='bid-1' itemType='BasketArticle' updateState='UpToDate'>
+      <manufacturer id='HM'/>
+      <series id='TEST'/>
+      <artNr type='base'>T01</artNr>
+      <artNr type='ofmlvarcode'>TC.Prop=Val</artNr>
+      <artNr type='final' default='1'>OLD_CODE</artNr>
+    </bskArticle>
+  </items>
+</cutBuffer>"""
+
+def _artnrs(article_el):
+    return {a.get("type"): (a.text or "") for a in article_el.findall("artNr")}
+
+
+def test_sentinel_injected_when_no_final_element():
+    result = build_obx_from_seed(_SEED_NO_FINAL, [{"article": "T01", "properties": {"Prop": "Val"}}], {"Prop": "TC"})
+    root = ET.fromstring(result)
+    for art in root.findall(".//bskArticle"):
+        assert _artnrs(art).get("final") == SENTINEL
+
+
+def test_sentinel_replaces_existing_final_element():
+    result = build_obx_from_seed(_SEED_WITH_FINAL, [{"article": "T01", "properties": {"Prop": "Val"}}], {"Prop": "TC"})
+    root = ET.fromstring(result)
+    for art in root.findall(".//bskArticle"):
+        assert _artnrs(art).get("final") == SENTINEL
+
+
+def test_sentinel_present_on_every_permutation():
+    perms = [
+        {"article": "T01", "properties": {"Prop": "A"}},
+        {"article": "T01", "properties": {"Prop": "B"}},
+        {"article": "T01", "properties": {"Prop": "C"}},
+    ]
+    result = build_obx_from_seed(_SEED_NO_FINAL, perms, {"Prop": "TC"})
+    root = ET.fromstring(result)
+    articles = root.findall(".//bskArticle")
+    assert len(articles) == 3
+    for art in articles:
+        assert _artnrs(art).get("final") == SENTINEL

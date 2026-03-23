@@ -1,7 +1,10 @@
 import itertools
 import uuid
+import xml.etree.ElementTree as ET
 from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom.minidom import parseString
+
+SENTINEL = "__SNAPPER_RAW__"
 
 
 def compute_permutations(
@@ -147,3 +150,96 @@ def build_obx(
 
     xml_bytes = tostring(root, encoding="unicode")
     return parseString(xml_bytes).toprettyxml(indent="  ")
+
+
+def build_obx_from_seed(
+    seed_xml: str,
+    permutations: list[dict],
+    property_to_class: dict[str, str],
+    prop_val_to_class: dict[tuple, str] | None = None,
+) -> str:
+    """
+    Build an OBX by string-substituting into a seed article template for each permutation.
+
+    Much faster than deep-copying XML trees: the seed article is serialised to a compact
+    string once, then basketId / updateState / ofmlvarcode are replaced per permutation.
+    """
+    root = ET.fromstring(seed_xml)
+
+    seed_article = root.find(".//bskArticle")
+    if seed_article is None:
+        raise ValueError("No <bskArticle> found in seed XML")
+
+    old_basket_id = seed_article.get("basketId", "")
+    old_update_state = seed_article.get("updateState", "UpToDate")
+
+    old_varcode = ""
+    for artnr in seed_article.findall("artNr"):
+        if artnr.get("type") == "ofmlvarcode":
+            old_varcode = artnr.text or ""
+            break
+
+    # Compact string template for one article (serialised once, reused N times)
+    article_template = ET.tostring(seed_article, encoding="unicode")
+
+    # Inject sentinel into <artNr type='final'> so pCon-updated valid articles
+    # lose the sentinel while unresolved invalid articles keep it.
+    _tmpl = ET.fromstring(article_template)
+    _final = next((a for a in _tmpl.findall("artNr") if a.get("type") == "final"), None)
+    if _final is None:
+        _final = ET.SubElement(_tmpl, "artNr")
+        _final.set("type", "final")
+        _final.set("default", "1")
+    _final.text = SENTINEL
+    article_template = ET.tostring(_tmpl, encoding="unicode")
+
+    doc_calc_el = root.find("docCalculationChanges")
+    pp_name = doc_calc_el.get("ppName", "") if doc_calc_el is not None else ""
+
+    ver_el = root.find("versionInfo")
+    version_str = ET.tostring(ver_el, encoding="unicode") if ver_el is not None else ""
+
+    # Build all article blocks via string substitution
+    article_blocks: list[str] = []
+    basket_ids: list[str] = []
+
+    for perm in permutations:
+        new_id = str(uuid.uuid4())
+        basket_ids.append(new_id)
+
+        varcode = build_varcode_multi(perm["properties"], property_to_class, prop_val_to_class)
+
+        art = article_template
+        # Swap basket id (ET uses double-quotes for attributes)
+        art = art.replace(f'basketId="{old_basket_id}"', f'basketId="{new_id}"', 1)
+        # Force re-resolution on pCon Update
+        art = art.replace(f'updateState="{old_update_state}"', 'updateState="Outdated"', 1)
+        # Replace varcode text content
+        if old_varcode:
+            art = art.replace(f">{old_varcode}</artNr>", f">{varcode}</artNr>", 1)
+
+        article_blocks.append(art)
+
+    doc_calc_entries = "\n".join(
+        f'    <itemCalculationChanges id="{bid}" />' for bid in basket_ids
+    )
+    doc_calc_open = f'<docCalculationChanges ppName="{pp_name}">' if pp_name else "<docCalculationChanges>"
+
+    parts = [
+        "<?xml version='1.0' encoding='UTF-8'?>",
+        "<cutBuffer>",
+        f"  <state sessionId=\"{uuid.uuid4()}\" />",
+        f"  {version_str}",
+        "  <items>",
+    ]
+    for block in article_blocks:
+        parts.append(f"    {block}")
+    parts += [
+        "  </items>",
+        f"  {doc_calc_open}",
+        doc_calc_entries,
+        "  </docCalculationChanges>",
+        "</cutBuffer>",
+    ]
+
+    return "\n".join(parts)
