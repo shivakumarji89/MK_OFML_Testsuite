@@ -1,7 +1,9 @@
 import io
 import pytest
+import xml.etree.ElementTree as ET
 from fastapi.testclient import TestClient
 from main import app
+from modules.snapper.generator import SENTINEL
 
 client = TestClient(app)
 
@@ -192,3 +194,79 @@ def test_generate_empty_queue_returns_400():
     }
     response = client.post("/api/snapper/generate", json=payload)
     assert response.status_code == 400
+
+
+# ── /clean-obx tests ───────────────────────────────────────────────────────────
+
+def _make_pcon_obx(articles: list[tuple[str, str | None]]) -> bytes:
+    """Build a minimal pCon-style OBX. articles: [(base_artnr, final_artnr_or_None)]"""
+    item_blocks = []
+    for i, (base, final) in enumerate(articles):
+        final_el = f'<artNr type="final">{final}</artNr>' if final is not None else ""
+        item_blocks.append(
+            f'<bskArticle basketId="bid-{i}" itemType="BasketArticle" updateState="UpToDate">'
+            f'<manufacturer id="HM"/><series id="test"/>'
+            f'<artNr type="base">{base}</artNr>{final_el}'
+            f'</bskArticle>'
+        )
+    calc_entries = "".join(f'<itemCalculationChanges id="bid-{i}"/>' for i in range(len(articles)))
+    return (
+        f'<?xml version="1.0" encoding="UTF-8"?>'
+        f'<cutBuffer><state sessionId="t"/>'
+        f'<items>{"".join(item_blocks)}</items>'
+        f'<docCalculationChanges ppName="p">{calc_entries}</docCalculationChanges>'
+        f'</cutBuffer>'
+    ).encode()
+
+
+def _clean(obx_bytes: bytes, label: str = "Low tables"):
+    return client.post(
+        "/api/snapper/clean-obx",
+        data={"label": label},
+        files={"file": ("pcon.obx", io.BytesIO(obx_bytes), "application/xml")},
+    )
+
+
+def test_clean_obx_returns_200():
+    resp = _clean(_make_pcon_obx([("T01", "REAL")]))
+    assert resp.status_code == 200
+
+
+def test_clean_obx_removes_sentinel_articles():
+    obx = _make_pcon_obx([("T01", "REAL"), ("T02", SENTINEL), ("T03", "REAL2")])
+    resp = _clean(obx)
+    root = ET.fromstring(resp.content)
+    assert len(root.findall(".//bskArticle")) == 2
+
+
+def test_clean_obx_kept_and_removed_headers():
+    obx = _make_pcon_obx([("T01", "REAL"), ("T02", SENTINEL), ("T03", "REAL2")])
+    resp = _clean(obx)
+    assert resp.headers["X-Kept-Count"] == "2"
+    assert resp.headers["X-Removed-Count"] == "1"
+
+
+def test_clean_obx_filename_contains_label():
+    resp = _clean(_make_pcon_obx([("T01", "REAL")]), label="Low tables")
+    assert "Low_tables_Clean.obx" in resp.headers["Content-Disposition"]
+
+
+def test_clean_obx_empty_label():
+    resp = _clean(_make_pcon_obx([("T01", "REAL")]), label="")
+    assert "Clean.obx" in resp.headers["Content-Disposition"]
+
+
+def test_clean_obx_removes_doc_calc_entries():
+    obx = _make_pcon_obx([("T01", "REAL"), ("T02", SENTINEL)])
+    resp = _clean(obx)
+    root = ET.fromstring(resp.content)
+    doc_calc = root.find("docCalculationChanges")
+    assert doc_calc is not None
+    assert len(doc_calc.findall("itemCalculationChanges")) == 1
+
+
+def test_clean_obx_all_valid():
+    obx = _make_pcon_obx([("T01", "CODE1"), ("T02", "CODE2")])
+    resp = _clean(obx)
+    assert resp.headers["X-Kept-Count"] == "2"
+    assert resp.headers["X-Removed-Count"] == "0"
