@@ -9,7 +9,7 @@
 <body class="bg-gray-100 min-h-screen flex flex-col">
 
   <header class="bg-white shadow sticky top-0 z-10">
-    <div class="max-w-full px-6 py-3 flex flex-wrap items-end gap-4">
+    <div id="settingsHeaderRow" class="max-w-full px-6 py-3 flex flex-wrap items-end gap-4">
       <a href="/" class="text-sm text-blue-600 hover:underline mr-2">← Home</a>
       <h1 class="text-lg font-bold text-gray-800 mr-4">Snapper File Generator</h1>
       <div>
@@ -122,5 +122,9 @@
   </div>
 
   <script src="/static/snapper/snapper.js"></script>
+<script src="/static/settings.js"></script>
+<script>
+  initSettingsGear(document.getElementById('settingsHeaderRow'));
+</script>
 </body>
 </html>
