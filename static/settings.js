@@ -130,7 +130,7 @@ function initSettingsGear(headerEl, options = {}) {
         row.querySelector('.rename-input').addEventListener('keydown', (e) => {
           if (e.key === 'Escape') _renderRepoList();
         });
-      });
+      }, { once: true });
     });
 
     // wire delete buttons
