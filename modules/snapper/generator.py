@@ -1,4 +1,5 @@
 import itertools
+import re
 import uuid
 import xml.etree.ElementTree as ET
 from xml.etree.ElementTree import Element, SubElement, tostring
@@ -147,6 +148,9 @@ def build_obx(
             if varcode:
                 varcode_el = SubElement(basket_article, "artNr", type="ofmlvarcode")
                 varcode_el.text = varcode
+            desc_el = SubElement(basket_article, "description", type="long")
+            text_el = SubElement(desc_el, "text", lang="en")
+            text_el.text = " | ".join(f"{k}={v}" for k, v in properties.items())
 
     xml_bytes = tostring(root, encoding="unicode")
     return parseString(xml_bytes).toprettyxml(indent="  ")
@@ -191,6 +195,7 @@ def build_obx_from_seed(
         _final.set("type", "final")
         _final.set("default", "1")
     _final.text = SENTINEL
+
     article_template = ET.tostring(_tmpl, encoding="unicode")
 
     doc_calc_el = root.find("docCalculationChanges")
@@ -217,6 +222,21 @@ def build_obx_from_seed(
         # Replace varcode text content
         if old_varcode:
             art = art.replace(f">{old_varcode}</artNr>", f">{varcode}</artNr>", 1)
+        # Inject long description with all applied property=value pairs.
+        # Done per-permutation directly on the article string.
+        desc_text = " | ".join(f"{k}={v}" for k, v in perm["properties"].items())
+        if desc_text:
+            new_long_desc = f'<description type="long"><text lang="en">{desc_text}</text></description>'
+            new_art = re.sub(
+                r'<description[^>]*\btype="long"[^>]*>.*?</description>',
+                new_long_desc,
+                art,
+                count=1,
+                flags=re.DOTALL,
+            )
+            art = new_art if new_art != art else art.replace(
+                '</bskArticle>', f'{new_long_desc}</bskArticle>', 1
+            )
 
         article_blocks.append(art)
 
@@ -229,6 +249,146 @@ def build_obx_from_seed(
         "<?xml version='1.0' encoding='UTF-8'?>",
         "<cutBuffer>",
         f"  <state sessionId=\"{uuid.uuid4()}\" />",
+        f"  {version_str}",
+        "  <items>",
+    ]
+    for block in article_blocks:
+        parts.append(f"    {block}")
+    parts += [
+        "  </items>",
+        f"  {doc_calc_open}",
+        doc_calc_entries,
+        "  </docCalculationChanges>",
+        "</cutBuffer>",
+    ]
+
+    return "\n".join(parts)
+
+
+def build_obx_from_multi_seed(
+    article_seeds: dict[str, str],
+    permutations: list[dict],
+    article_class_maps: dict[str, dict],
+) -> str:
+    """
+    Build one OBX from permutations across multiple articles, each with its own
+    seed XML template and class maps.
+
+    Args:
+        article_seeds: {article_code: minimal_cutBuffer_xml_string}
+            Each value is a full XML string containing exactly one bskArticle
+            (the template for that article code).
+        permutations: list of {article, properties} dicts (output of compute_permutations).
+        article_class_maps: {article_code: {property_to_class, prop_val_to_class}}
+
+    Returns:
+        OBX XML string with all permutations as bskArticle elements.
+    """
+    article_templates: dict[str, ET.Element] = {}
+    article_old_varcodes: dict[str, str] = {}
+    article_old_basket_ids: dict[str, str] = {}
+    article_old_update_states: dict[str, str] = {}
+    pp_name = ""
+    version_str = ""
+
+    for code, seed_xml in article_seeds.items():
+        root = ET.fromstring(seed_xml)
+        art = root.find(".//bskArticle")
+        if art is None:
+            continue
+        article_templates[code] = art
+        article_old_basket_ids[code] = art.get("basketId", "")
+        article_old_update_states[code] = art.get("updateState", "UpToDate")
+
+        old_varcode = ""
+        for artnr in art.findall("artNr"):
+            if artnr.get("type") == "ofmlvarcode":
+                old_varcode = artnr.text or ""
+                break
+        article_old_varcodes[code] = old_varcode
+
+        if not version_str:
+            ver_el = root.find("versionInfo")
+            if ver_el is not None:
+                version_str = ET.tostring(ver_el, encoding="unicode")
+
+    # Build article string templates (with sentinel injected into final artNr)
+    article_str_templates: dict[str, str] = {}
+    for code, art_el in article_templates.items():
+        tmpl = ET.fromstring(ET.tostring(art_el, encoding="unicode"))
+        final = next((a for a in tmpl.findall("artNr") if a.get("type") == "final"), None)
+        if final is None:
+            final = ET.SubElement(tmpl, "artNr")
+            final.set("type", "final")
+            final.set("default", "1")
+        final.text = SENTINEL
+        article_str_templates[code] = ET.tostring(tmpl, encoding="unicode")
+
+    article_blocks: list[str] = []
+    basket_ids: list[str] = []
+
+    for perm in permutations:
+        code = perm["article"]
+        tmpl_str = article_str_templates.get(code)
+        if tmpl_str is None:
+            continue
+
+        maps = article_class_maps.get(code, {})
+        ptc = maps.get("property_to_class", {})
+        pvtc_raw = maps.get("prop_val_to_class", {})
+        pvtc: dict[tuple, str] = {}
+        for key_str, cls in pvtc_raw.items():
+            eq = key_str.find("=")
+            if eq != -1:
+                pvtc[(key_str[:eq], key_str[eq + 1:])] = cls
+
+        new_id = str(uuid.uuid4())
+        basket_ids.append(new_id)
+
+        varcode = build_varcode_multi(perm["properties"], ptc, pvtc)
+
+        art = tmpl_str
+        art = art.replace(
+            f'basketId="{article_old_basket_ids[code]}"', f'basketId="{new_id}"', 1
+        )
+        art = art.replace(
+            f'updateState="{article_old_update_states[code]}"',
+            'updateState="Outdated"',
+            1,
+        )
+        old_vc = article_old_varcodes.get(code, "")
+        if old_vc:
+            art = art.replace(f">{old_vc}</artNr>", f">{varcode}</artNr>", 1)
+
+        desc_text = " | ".join(f"{k}={v}" for k, v in perm["properties"].items())
+        if desc_text:
+            new_long_desc = (
+                f'<description type="long"><text lang="en">{desc_text}</text></description>'
+            )
+            new_art = re.sub(
+                r'<description[^>]*\btype="long"[^>]*>.*?</description>',
+                new_long_desc,
+                art,
+                count=1,
+                flags=re.DOTALL,
+            )
+            art = new_art if new_art != art else art.replace(
+                "</bskArticle>", f"{new_long_desc}</bskArticle>", 1
+            )
+
+        article_blocks.append(art)
+
+    doc_calc_entries = "\n".join(
+        f'    <itemCalculationChanges id="{bid}" />' for bid in basket_ids
+    )
+    doc_calc_open = (
+        f'<docCalculationChanges ppName="{pp_name}">' if pp_name else "<docCalculationChanges>"
+    )
+
+    parts = [
+        "<?xml version='1.0' encoding='UTF-8'?>",
+        "<cutBuffer>",
+        f'  <state sessionId="{uuid.uuid4()}" />',
         f"  {version_str}",
         "  <items>",
     ]

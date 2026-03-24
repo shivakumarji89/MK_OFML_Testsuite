@@ -155,3 +155,89 @@ def test_sentinel_present_on_every_permutation():
     assert len(articles) == 3
     for art in articles:
         assert _artnrs(art).get("final") == SENTINEL
+
+
+from modules.snapper.generator import build_obx_from_multi_seed
+
+# Minimal article XML templates for testing
+_NOHAN1_XML = """<cutBuffer><items>
+  <bskArticle basketId='aaa' itemType='BasketAggregate' updateState='UpToDate'>
+    <manufacturer id='HM'/>
+    <series id='HATCH'/>
+    <artNr type='base'>NOHAN1</artNr>
+    <artNr type='ofmlvarcode'>HATCH_ATTR_CHAIR.Type=20;HATCH_OPT.Base_Finish=R00</artNr>
+    <artNr type='final' default='1'>NOHAN1_RESOLVED</artNr>
+    <docCalculationChanges ppName='test'/>
+  </bskArticle>
+</items></cutBuffer>"""
+
+_NOHAN2_XML = """<cutBuffer><items>
+  <bskArticle basketId='bbb' itemType='BasketAggregate' updateState='UpToDate'>
+    <manufacturer id='HM'/>
+    <series id='HATCH'/>
+    <artNr type='base'>NOHAN2</artNr>
+    <artNr type='ofmlvarcode'>HATCH_ATTR_NEW.Type=20;HATCH_OPT.Base_Finish=R00</artNr>
+    <artNr type='final' default='1'>NOHAN2_RESOLVED</artNr>
+    <docCalculationChanges ppName='test'/>
+  </bskArticle>
+</items></cutBuffer>"""
+
+
+def test_build_obx_from_multi_seed_single_article_two_perms():
+    """Single article, two property permutations -> two bskArticle elements."""
+    perms = [
+        {"article": "NOHAN1", "properties": {"Type": "20", "Base_Finish": "R00"}},
+        {"article": "NOHAN1", "properties": {"Type": "20", "Base_Finish": "SL"}},
+    ]
+    article_seeds = {"NOHAN1": _NOHAN1_XML}
+    article_class_maps = {
+        "NOHAN1": {
+            "property_to_class": {"Type": "HATCH_ATTR_CHAIR", "Base_Finish": "HATCH_OPT"},
+            "prop_val_to_class": {},
+        }
+    }
+    result = build_obx_from_multi_seed(article_seeds, perms, article_class_maps)
+    assert result.count("<bskArticle") == 2
+
+
+def test_build_obx_from_multi_seed_two_articles():
+    """Two articles, one permutation each -> two bskArticle elements."""
+    perms = [
+        {"article": "NOHAN1", "properties": {"Base_Finish": "R00"}},
+        {"article": "NOHAN2", "properties": {"Base_Finish": "R00"}},
+    ]
+    article_seeds = {"NOHAN1": _NOHAN1_XML, "NOHAN2": _NOHAN2_XML}
+    article_class_maps = {
+        "NOHAN1": {
+            "property_to_class": {"Base_Finish": "HATCH_OPT"},
+            "prop_val_to_class": {},
+        },
+        "NOHAN2": {
+            "property_to_class": {"Base_Finish": "HATCH_OPT"},
+            "prop_val_to_class": {},
+        },
+    }
+    result = build_obx_from_multi_seed(article_seeds, perms, article_class_maps)
+    assert result.count("<bskArticle") == 2
+
+
+def test_build_obx_from_multi_seed_uses_per_article_class():
+    """Each article's varcode uses its own article class prefix."""
+    perms = [
+        {"article": "NOHAN1", "properties": {"Type": "20"}},
+        {"article": "NOHAN2", "properties": {"Type": "20"}},
+    ]
+    article_seeds = {"NOHAN1": _NOHAN1_XML, "NOHAN2": _NOHAN2_XML}
+    article_class_maps = {
+        "NOHAN1": {
+            "property_to_class": {"Type": "HATCH_ATTR_CHAIR"},
+            "prop_val_to_class": {},
+        },
+        "NOHAN2": {
+            "property_to_class": {"Type": "HATCH_ATTR_NEW"},
+            "prop_val_to_class": {},
+        },
+    }
+    result = build_obx_from_multi_seed(article_seeds, perms, article_class_maps)
+    assert "HATCH_ATTR_CHAIR.Type=20" in result
+    assert "HATCH_ATTR_NEW.Type=20" in result
