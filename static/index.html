@@ -8,9 +8,11 @@
 </head>
 <body class="bg-gray-100 min-h-screen">
   <header class="bg-white shadow">
-    <div class="max-w-7xl mx-auto px-6 py-4">
-      <h1 class="text-2xl font-bold text-gray-800">OFML Testsuite</h1>
-      <p class="text-sm text-gray-500">MillerKnoll QA Tools</p>
+    <div id="homeHeaderRow" class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+      <div>
+        <h1 class="text-2xl font-bold text-gray-800">OFML Testsuite</h1>
+        <p class="text-sm text-gray-500">MillerKnoll QA Tools</p>
+      </div>
     </div>
   </header>
   <main class="max-w-7xl mx-auto px-6 py-10">
@@ -25,5 +27,9 @@
       </a>
     </div>
   </main>
+  <script src="/static/settings.js"></script>
+  <script>
+    initSettingsGear(document.getElementById('homeHeaderRow'));
+  </script>
 </body>
 </html>
