@@ -876,3 +876,117 @@ async function cleanItem(id, file) {
 // ── Init ───────────────────────────────────────────────────────────────────────
 loadQueue();
 renderQueue();
+
+// ── Raw Seed Generator ─────────────────────────────────────────────────────────
+const rawSeedModal  = document.getElementById('rawSeedModal');
+const rawSeedSelect = document.getElementById('rawSeedRangeSelect');
+const rawSeedError  = document.getElementById('rawSeedError');
+const rawSeedGenBtn = document.getElementById('rawSeedGenerateBtn');
+
+document.getElementById('generateSeedBtn').addEventListener('click', openRawSeedModal);
+document.getElementById('rawSeedCancelBtn').addEventListener('click', closeRawSeedModal);
+// Click outside the card to dismiss
+rawSeedModal.addEventListener('click', (e) => { if (e.target === rawSeedModal) closeRawSeedModal(); });
+rawSeedSelect.addEventListener('change', () => {
+  rawSeedGenBtn.disabled = !rawSeedSelect.value;
+});
+rawSeedGenBtn.addEventListener('click', downloadRawSeed);
+
+async function openRawSeedModal() {
+  const repo = repoPathInput.value.trim();
+  if (!repo) {
+    alert('Please enter the repository path first.');
+    return;
+  }
+
+  // Reset state
+  rawSeedSelect.innerHTML = '<option value="">Loading ranges…</option>';
+  rawSeedGenBtn.disabled = true;
+  rawSeedError.classList.add('hidden');
+  rawSeedModal.classList.remove('hidden');
+
+  try {
+    const resp = await fetch(`/api/snapper/ranges?repo=${encodeURIComponent(repo)}`);
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || resp.statusText);
+    }
+    const { ranges } = await resp.json();
+    _populateRangeSelect(ranges);
+  } catch (err) {
+    rawSeedSelect.innerHTML = '<option value="">Failed to load ranges</option>';
+    _showRawSeedError(`Could not load ranges: ${err.message}`);
+  }
+}
+
+function _populateRangeSelect(ranges) {
+  if (!ranges.length) {
+    rawSeedSelect.innerHTML = '<option value="">No ranges found in this repository</option>';
+    return;
+  }
+  // Group by manufacturer using optgroup
+  const byMfr = {};
+  for (const r of ranges) {
+    (byMfr[r.manufacturer] ??= []).push(r);
+  }
+  rawSeedSelect.innerHTML = '<option value="">Select a range…</option>';
+  for (const [mfr, rlist] of Object.entries(byMfr)) {
+    const grp = document.createElement('optgroup');
+    grp.label = mfr;
+    for (const r of rlist) {
+      const opt = document.createElement('option');
+      opt.value = JSON.stringify({ manufacturer: r.manufacturer, range: r.range });
+      opt.textContent = r.range;
+      grp.appendChild(opt);
+    }
+    rawSeedSelect.appendChild(grp);
+  }
+}
+
+async function downloadRawSeed() {
+  const repo = repoPathInput.value.trim();
+  const selection = rawSeedSelect.value;
+  if (!selection) return;
+
+  const { manufacturer, range } = JSON.parse(selection);
+
+  rawSeedGenBtn.disabled = true;
+  rawSeedGenBtn.textContent = 'Generating…';
+  rawSeedError.classList.add('hidden');
+
+  try {
+    const resp = await fetch('/api/snapper/generate-raw-seed', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo, manufacturer, range }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || resp.statusText);
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `raw_seed_${range}.obx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    closeRawSeedModal();
+  } catch (err) {
+    _showRawSeedError(`Generation failed: ${err.message}`);
+  } finally {
+    rawSeedGenBtn.disabled = false;
+    rawSeedGenBtn.textContent = 'Generate \u0026 Download';
+  }
+}
+
+function closeRawSeedModal() {
+  rawSeedModal.classList.add('hidden');
+}
+
+function _showRawSeedError(msg) {
+  rawSeedError.textContent = msg;
+  rawSeedError.classList.remove('hidden');
+}
