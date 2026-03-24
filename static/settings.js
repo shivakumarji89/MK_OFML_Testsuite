@@ -119,14 +119,14 @@ function initSettingsGear(headerEl, options = {}) {
           <input class="rename-input border rounded px-1 py-0.5 text-sm w-36" value="${_esc(currentName)}">`;
         btn.textContent = 'Save';
         btn.classList.replace('text-blue-500', 'text-green-600');
-        btn.onclick = () => {
+        btn.addEventListener('click', () => {
           const input = row.querySelector('.rename-input');
           const newName = input.value.trim();
           if (!newName) return;
           Settings.renameRepo(id, newName);
           _emitChanged();
           _renderRepoList();
-        };
+        }, { once: true });
         row.querySelector('.rename-input').addEventListener('keydown', (e) => {
           if (e.key === 'Escape') _renderRepoList();
         });
