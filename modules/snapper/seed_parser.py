@@ -8,72 +8,110 @@ class SeedParseError(ValueError):
 
 def parse_seed(xml_string: str) -> dict:
     """
-    Parse a pCon OBX XML string and extract seed data from the first bskArticle.
-
-    Args:
-        xml_string: Full content of an OBX file as a string.
+    Parse a pCon OBX XML string and extract seed data from ALL bskArticle elements.
 
     Returns:
         {
-            "article": str,           # base article code, e.g. "NOCLE4"
-            "manufacturer": str,      # e.g. "HM"
-            "series": str,            # e.g. "CLOUD"
-            "properties": [
+            "manufacturer": str,
+            "series": str,
+            "articles": [
                 {
-                    "name": str,          # property name, e.g. "Type"
-                    "article_class": str, # e.g. "CLOUD_ATTR_ARM_CHAIR"
-                    "seed_value": str,    # the value from the seed OBX
+                    "article": str,        # base article code
+                    "label": str | None,   # short description (English preferred)
+                    "properties": [
+                        {"name": str, "article_class": str, "seed_value": str},
+                        ...
+                    ],
+                    "article_xml": str,    # serialised bskArticle element (for seed templates)
                 },
                 ...
-            ]
+            ],
+            "raw_xml": str,
         }
 
     Raises:
-        SeedParseError: if the XML cannot be parsed, no bskArticle is found,
-                        or required fields (manufacturer, series, base artNr,
-                        ofmlvarcode artNr) are missing.
+        SeedParseError: if the XML is malformed, no bskArticle found,
+                        or required fields are missing in the first article.
     """
     try:
         root = ET.fromstring(xml_string)
     except ET.ParseError as e:
         raise SeedParseError(f"Invalid XML: {e}") from e
 
-    article_el = root.find(".//bskArticle")
-    if article_el is None:
+    article_elements = root.findall(".//bskArticle")
+    if not article_elements:
         raise SeedParseError("No <bskArticle> element found in OBX")
 
-    mfr_el = article_el.find("manufacturer")
+    # manufacturer and series are read from the first article (shared across all)
+    first = article_elements[0]
+    mfr_el = first.find("manufacturer")
     if mfr_el is None or not mfr_el.get("id"):
         raise SeedParseError("Missing <manufacturer id='...'> in bskArticle")
     manufacturer = mfr_el.get("id")
 
-    series_el = article_el.find("series")
+    series_el = first.find("series")
     if series_el is None or not series_el.get("id"):
         raise SeedParseError("Missing <series id='...'> in bskArticle")
     series = series_el.get("id")
 
-    article_code = None
-    varcode_str = None
-    for artnr in article_el.findall("artNr"):
-        t = artnr.get("type", "")
-        if t == "base":
-            article_code = (artnr.text or "").strip()
-        elif t == "ofmlvarcode":
-            varcode_str = (artnr.text or "").strip()
+    articles = []
+    for article_el in article_elements:
+        article_code = None
+        varcode_str = None
+        for artnr in article_el.findall("artNr"):
+            t = artnr.get("type", "")
+            if t == "base":
+                article_code = (artnr.text or "").strip()
+            elif t == "ofmlvarcode":
+                varcode_str = (artnr.text or "").strip()
 
-    if not article_code:
-        raise SeedParseError("Missing <artNr type='base'> in bskArticle")
-    if not varcode_str:
-        raise SeedParseError("Missing <artNr type='ofmlvarcode'> in bskArticle")
+        if not article_code:
+            raise SeedParseError("Missing <artNr type='base'> in bskArticle")
+        if not varcode_str:
+            raise SeedParseError("Missing <artNr type='ofmlvarcode'> in bskArticle")
 
-    properties = _parse_varcode(varcode_str)
+        properties = _parse_varcode(varcode_str)
+        label = _extract_short_description(article_el)
+        article_xml = ET.tostring(article_el, encoding="unicode")
+
+        articles.append({
+            "article": article_code,
+            "label": label,
+            "properties": properties,
+            "article_xml": article_xml,
+        })
 
     return {
-        "article": article_code,
         "manufacturer": manufacturer,
         "series": series,
-        "properties": properties,
+        "articles": articles,
+        "raw_xml": xml_string,
     }
+
+
+def _extract_short_description(article_el: ET.Element) -> str | None:
+    """
+    Extract the short description text from a bskArticle element.
+    Prefers English; falls back to the first available language.
+    Returns None if no short description element is present.
+    """
+    desc_el = next(
+        (d for d in article_el.findall("description") if d.get("type") == "short"),
+        None,
+    )
+    if desc_el is None:
+        return None
+
+    texts = desc_el.findall("text")
+    if not texts:
+        return None
+
+    en_text = next((t for t in texts if t.get("lang") == "en"), None)
+    if en_text is not None and en_text.text:
+        return en_text.text.strip()
+
+    first_text = next((t for t in texts if t.text), None)
+    return first_text.text.strip() if first_text is not None else None
 
 
 def _parse_varcode(varcode_str: str) -> list[dict]:
