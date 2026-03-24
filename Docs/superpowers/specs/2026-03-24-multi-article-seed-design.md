@@ -38,8 +38,8 @@ After parsing, group articles by `frozenset(prop["name"] for prop in article["pr
 For each group:
 - Build `property_columns` from the first article (OCD values are the same for all articles in the group).
 - Build per-article class maps: `property_to_class` and `prop_val_to_class`.
-- Store the first article's raw XML in `_seed_store` as the seed template for `build_obx_from_seed`.
-- Assign a unique `seed_token` per group.
+- Wrap each article's raw XML element in a minimal cutBuffer and store it in `_seed_store`.
+- Assign a unique `seed_token` per article (not per group) — each article needs its own template for varcode generation.
 
 **Response shape changes** from a flat response to a `groups` array:
 
@@ -57,17 +57,18 @@ For each group:
           "code": "NOHAN1",
           "label": "Hatch - Single seat",
           "property_to_class": { "Type": "HATCH_ATTR_CHAIR", ... },
-          "prop_val_to_class": { "Type=20": "HATCH_ATTR_CHAIR", ... }
+          "prop_val_to_class": { "Type=20": "HATCH_ATTR_CHAIR", ... },
+          "seed_token": "abc123"
         },
         {
           "code": "NOHAN2",
           "label": "Hatch - Double seat",
           "property_to_class": { "Type": "HATCH_ATTR_NEW", ... },
-          "prop_val_to_class": { "Type=20": "HATCH_ATTR_NEW", ... }
+          "prop_val_to_class": { "Type=20": "HATCH_ATTR_NEW", ... },
+          "seed_token": "abc456"
         }
       ],
-      "property_columns": [ ... ],
-      "seed_token": "abc123"
+      "property_columns": [ ... ]
     },
     {
       "id": "group-1",
@@ -76,11 +77,11 @@ For each group:
           "code": "NOHAN1",
           "label": "Hatch - Single seat (2 fabrics)",
           "property_to_class": { ... },
-          "prop_val_to_class": { ... }
+          "prop_val_to_class": { ... },
+          "seed_token": "def456"
         }
       ],
-      "property_columns": [ ... ],
-      "seed_token": "def456"
+      "property_columns": [ ... ]
     }
   ]
 }
