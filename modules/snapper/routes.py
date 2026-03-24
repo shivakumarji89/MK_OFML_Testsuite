@@ -170,8 +170,8 @@ async def parse_seed_endpoint(
 # ── /generate endpoint ────────────────────────────────────────────────────────
 
 class ChildResolution(BaseModel):
-    parent: str               # parent property name, e.g. "Shell_Fabric_Type"
-    resolution: dict[str, str]  # {parent_value: child_value}, e.g. {"1HA": "1HA01"}
+    parent: str                       # parent property name, e.g. "Shell_Fabric_Type"
+    resolution: dict[str, list[str]]  # {parent_value: [child_values]}, empty list = omit child
 
 
 class QueueItem(BaseModel):
@@ -190,6 +190,51 @@ class GenerateRequest(BaseModel):
     queue: list[QueueItem]
     filename: str = "snapper.obx"
     seed_token: str | None = None
+
+
+def expand_permutations_with_children(
+    permutations: list[dict],
+    child_resolutions: dict[str, dict],
+) -> list[dict]:
+    """
+    Expand permutations to include child property values.
+
+    For each base permutation (parent-only cartesian product):
+    - Look up child values for the permutation's parent value.
+    - If child values exist: expand into N copies (one per child value).
+    - If child values are empty or parent value not in resolution: keep perm as-is,
+      child property is simply absent from the varcode.
+
+    Args:
+        permutations: list of {article, properties} dicts (parent-only dimensions)
+        child_resolutions: {child_prop_name: {"parent": str, "resolution": {parent_val: [child_vals]}}}
+            Plain dicts — callers must convert Pydantic models before calling.
+
+    Returns:
+        Expanded list of {article, properties} dicts.
+    """
+    if not child_resolutions:
+        return permutations
+
+    expanded = []
+    for perm in permutations:
+        child_expansions: list[dict] = [{}]
+        for child_prop, cr in child_resolutions.items():
+            parent_val = perm["properties"].get(cr["parent"], "")
+            child_vals = cr["resolution"].get(parent_val, [])
+            if child_vals:
+                new_expansions = []
+                for existing in child_expansions:
+                    for cv in child_vals:
+                        new_expansions.append({**existing, child_prop: cv})
+                child_expansions = new_expansions
+            # else: child prop omitted for this permutation — child_expansions unchanged
+        for extra in child_expansions:
+            expanded.append({
+                "article": perm["article"],
+                "properties": {**perm["properties"], **extra},
+            })
+    return expanded
 
 
 @router.post("/generate")
@@ -217,14 +262,12 @@ def generate_obx(req: GenerateRequest):
                 pvtc[(prop_name, val)] = cls
 
         permutations = compute_permutations([item.article], item.selected_properties)
-        # Resolve child properties per-permutation based on that permutation's parent value.
-        # This avoids a cartesian explosion (child × parent instead of paired assignment).
-        for perm in permutations:
-            for child_prop, cr in item.child_resolutions.items():
-                parent_val = perm["properties"].get(cr.parent, "")
-                child_val = cr.resolution.get(parent_val, "")
-                if child_val:
-                    perm["properties"][child_prop] = child_val
+        # Convert Pydantic ChildResolution models to plain dicts for the helper
+        child_res_dicts = {
+            name: {"parent": cr.parent, "resolution": cr.resolution}
+            for name, cr in item.child_resolutions.items()
+        }
+        permutations = expand_permutations_with_children(permutations, child_res_dicts)
         seed_xml = _seed_store.get(req.seed_token) if req.seed_token else None
         if seed_xml:
             xml_content = build_obx_from_seed(
