@@ -2,6 +2,7 @@ import itertools
 import re
 import uuid
 import xml.etree.ElementTree as ET
+from datetime import date
 from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom.minidom import parseString
 
@@ -152,6 +153,13 @@ def build_obx(
             text_el = SubElement(desc_el, "text", lang="en")
             text_el.text = " | ".join(f"{k}={v}" for k, v in properties.items())
 
+    basket_ids = [
+        el.get("basketId") for el in items.findall("bskArticle")
+    ]
+    doc_calc = SubElement(root, "docCalculationChanges", ppName="STDB2B_WBK")
+    for bid in basket_ids:
+        SubElement(doc_calc, "itemCalculationChanges", id=bid)
+
     xml_bytes = tostring(root, encoding="unicode")
     return parseString(xml_bytes).toprettyxml(indent="  ")
 
@@ -243,7 +251,7 @@ def build_obx_from_seed(
     doc_calc_entries = "\n".join(
         f'    <itemCalculationChanges id="{bid}" />' for bid in basket_ids
     )
-    doc_calc_open = f'<docCalculationChanges ppName="{pp_name}">' if pp_name else "<docCalculationChanges>"
+    doc_calc_open = f'<docCalculationChanges ppName="{pp_name or "STDB2B_WBK"}">'
 
     parts = [
         "<?xml version='1.0' encoding='UTF-8'?>",
@@ -311,6 +319,11 @@ def build_obx_from_multi_seed(
             ver_el = root.find("versionInfo")
             if ver_el is not None:
                 version_str = ET.tostring(ver_el, encoding="unicode")
+
+        if not pp_name:
+            doc_calc_el = root.find("docCalculationChanges")
+            if doc_calc_el is not None:
+                pp_name = doc_calc_el.get("ppName", "")
 
     # Build article string templates (with sentinel injected into final artNr)
     article_str_templates: dict[str, str] = {}
@@ -381,9 +394,7 @@ def build_obx_from_multi_seed(
     doc_calc_entries = "\n".join(
         f'    <itemCalculationChanges id="{bid}" />' for bid in basket_ids
     )
-    doc_calc_open = (
-        f'<docCalculationChanges ppName="{pp_name}">' if pp_name else "<docCalculationChanges>"
-    )
+    doc_calc_open = f'<docCalculationChanges ppName="{pp_name or "STDB2B_WBK"}">'
 
     parts = [
         "<?xml version='1.0' encoding='UTF-8'?>",
@@ -403,3 +414,111 @@ def build_obx_from_multi_seed(
     ]
 
     return "\n".join(parts)
+
+
+def build_raw_seed_obx(
+    articles: list[dict],
+    prog_id: str,
+    mfr_folder: str,
+) -> str:
+    """
+    Build a 'raw seed' OBX with one bskArticle per article.
+    Only manufacturer ID, series ID, and base article code are filled in.
+    Everything else is blank/zero — pCon fills in defaults on Update.
+
+    Args:
+        articles: list of {code, manufacturer_code, series_code} dicts
+        prog_id: pCon catalog identifier, e.g. "@hmx_aeron" — from read_prog_id()
+        mfr_folder: repository manufacturer folder name, e.g. "hmx" — for catalogue_id
+    """
+    today = date.today().isoformat()
+    session_id = str(uuid.uuid4())
+    catalogue_id = f"@{mfr_folder}_catalogue"
+
+    root = Element("cutBuffer")
+    SubElement(root, "state", sessionId=session_id)
+    SubElement(root, "versionInfo",
+               vendorKey="EasternGraphics",
+               appKey="EAI-Server",
+               appVersion="4.18.3",
+               bskXmlVersion="1.8.10")
+
+    items = SubElement(root, "items")
+    basket_ids: list[str] = []
+
+    for art in articles:
+        article_code = art["code"]
+        mfr_code = art["manufacturer_code"]
+        series_code = art["series_code"]
+
+        bid = str(uuid.uuid4())
+        basket_ids.append(bid)
+
+        bsk = SubElement(items, "bskArticle",
+                         basketId=bid,
+                         itemType="BasketAggregate",
+                         updateState="UpToDate")
+
+        SubElement(bsk, "manufacturer", id=mfr_code)
+        SubElement(bsk, "series", id=series_code)
+
+        base_nr = SubElement(bsk, "artNr", type="base")
+        base_nr.text = article_code
+        SubElement(bsk, "artNr", type="final", default="1")
+        SubElement(bsk, "artNr", type="varcode")
+        SubElement(bsk, "artNr", type="ofmlvarcode")
+
+        short_desc = SubElement(bsk, "description", type="short", default="0")
+        SubElement(short_desc, "text", lang="en")
+        long_desc = SubElement(bsk, "description", type="long", default="1")
+        SubElement(long_desc, "text", lang="en")
+        feat_desc = SubElement(bsk, "description", type="features", default="0")
+        SubElement(feat_desc, "text", lang="en")
+
+        SubElement(bsk, "features")
+
+        SubElement(bsk, "itemPrice", type="purchase", currency="EUR", value="0")
+        SubElement(bsk, "itemPrice", type="sale", pd="1", currency="EUR", value="0")
+        SubElement(bsk, "itemPrice", type="sale", currency="EUR", value="0")
+        SubElement(bsk, "itemPriceComponents", type="purchase")
+        SubElement(bsk, "itemPriceComponents", type="sale")
+        SubElement(bsk, "priceComponents")
+        SubElement(bsk, "taxInfos")
+
+        pd_info = SubElement(bsk, "pdInfo",
+                             pdbType="ocd",
+                             pkgName="::ofml::oi",
+                             manufacturerId=mfr_code,
+                             seriesId=series_code,
+                             progId=prog_id,
+                             region="EURO",
+                             salesOnly="false",
+                             aggrSalesOnly="false")
+        SubElement(pd_info, "ocd", orderUnit="C62")
+
+        SubElement(bsk, "packInfos")
+        SubElement(bsk, "priceDate", value=today)
+        SubElement(bsk, "artCalc")
+
+        add1 = SubElement(bsk, "addStateCode", type="OiOdbPlElement")
+        add1.text = ""
+        add2 = SubElement(bsk, "addStateCode", type="ChildProps", aggr="1")
+        add2.text = ""
+
+        pvc1 = SubElement(bsk, "propVarCode")
+        pvc1.text = ""
+        pvc2 = SubElement(bsk, "propVarCode", aggr="1")
+        pvc2.text = ""
+
+        SubElement(bsk, "catalogInfo",
+                   id=catalogue_id,
+                   version="",
+                   artNr=article_code,
+                   varCode="")
+
+    doc_calc = SubElement(root, "docCalculationChanges", ppName="STDB2B_WBK")
+    for bid in basket_ids:
+        SubElement(doc_calc, "itemCalculationChanges", id=bid)
+
+    xml_bytes = tostring(root, encoding="unicode")
+    return parseString(xml_bytes).toprettyxml(indent="  ")
