@@ -40,9 +40,7 @@
           disabled>Parse Seed</button>
         <div id="seedStatus" class="text-sm text-gray-500"></div>
       </div>
-      <div id="seedInfo" class="hidden mt-3 p-3 bg-blue-50 rounded text-sm text-blue-800">
-        <span id="seedInfoText"></span>
-      </div>
+      <div id="tabStrip" class="hidden mt-3"></div>
     </div>
 
     <!-- 2. Dimension columns -->
@@ -58,10 +56,10 @@
         <input id="articleLabel" type="text" placeholder="e.g. Low tables"
           class="border rounded px-2 py-1 text-sm w-full">
       </div>
-      <div>
-        <div id="filenamePreview" class="text-xs text-gray-400 font-mono mb-0.5"></div>
+      <div class="flex items-center gap-2 ml-auto">
+        <div id="filenamePreview" class="text-xs text-gray-400 font-mono text-right"></div>
         <button id="addToQueueBtn"
-          class="bg-green-600 text-white px-4 py-1.5 rounded text-sm hover:bg-green-700 disabled:opacity-50"
+          class="flex-shrink-0 bg-green-600 text-white px-4 py-1.5 rounded text-sm hover:bg-green-700 disabled:opacity-50"
           disabled>+ Add to Queue</button>
       </div>
     </div>

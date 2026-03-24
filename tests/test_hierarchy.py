@@ -98,10 +98,10 @@ def test_detect_hierarchy_no_conditions_returns_empty():
 
 
 def test_detect_hierarchy_partial_conditions_not_child():
-    """If only some values of a property are conditioned, it's not a child."""
+    """Unconditioned values (relation_id=0) are skipped; conditioned values still form a hierarchy."""
     values = FABRIC_TYPE_VALUES + [
         _make_value("Shell_Fabric_Colour", "1HA01", relation_id="101"),
-        _make_value("Shell_Fabric_Colour", "1HA02", relation_id="0"),  # no condition!
+        _make_value("Shell_Fabric_Colour", "1HA02", relation_id="0"),  # no condition — skipped
     ]
     relations = {"101": "(SPECIFIED Shell_Fabric_Type) AND (Shell_Fabric_Type IN ('1HA'))"}
     result = detect_hierarchy(
@@ -109,17 +109,21 @@ def test_detect_hierarchy_partial_conditions_not_child():
         values,
         relations,
     )
-    assert result == []
+    # 1HA02 is skipped; 1HA01 is still detected as a child of Shell_Fabric_Type
+    assert len(result) == 1
+    assert result[0]["parent"] == "Shell_Fabric_Type"
+    assert result[0]["child"] == "Shell_Fabric_Colour"
+    assert result[0]["mapping"] == {"1HA": ["1HA01"]}
 
 
 def test_detect_hierarchy_complex_condition_not_child():
-    """Values with complex (non-parseable) conditions are not treated as children."""
+    """Article-level ($-prefixed) conditions are skipped; other valid conditions still form a hierarchy."""
     values = FABRIC_TYPE_VALUES + [
         _make_value("SomeChildProp", "val1", relation_id="901"),
         _make_value("SomeChildProp", "val2", relation_id="902"),
     ]
     relations = {
-        "901": "$ BAN NOT IN ('NOCLE100')",  # article-level
+        "901": "$ BAN NOT IN ('NOCLE100')",  # article-level — skipped
         "902": "(SPECIFIED Shell_Fabric_Type) AND (Shell_Fabric_Type IN ('1HA'))",
     }
     result = detect_hierarchy(
@@ -127,7 +131,11 @@ def test_detect_hierarchy_complex_condition_not_child():
         values,
         relations,
     )
-    assert result == []
+    # val1 is skipped ($-condition); val2 is detected as a child of Shell_Fabric_Type
+    assert len(result) == 1
+    assert result[0]["parent"] == "Shell_Fabric_Type"
+    assert result[0]["child"] == "SomeChildProp"
+    assert result[0]["mapping"] == {"1HA": ["val2"]}
 
 
 def test_detect_hierarchy_multiple_parent_refs_not_child():

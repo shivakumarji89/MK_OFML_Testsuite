@@ -28,7 +28,9 @@ function assembleZipFilename(series, article) {
 }
 
 // ── State ──────────────────────────────────────────────────────────────────────
-let currentSeed = null;
+let currentSeed = null;       // full parse-seed response: { manufacturer, series, groups, ... }
+let currentGroupIndex = 0;    // index of the active tab
+let groupStates = [];         // per-group UI state: [{ articleSelections, dimSelections }]
 let currentPermCount = 0;
 let queue = [];
 
@@ -40,7 +42,28 @@ function saveQueue() {
 function loadQueue() {
   try {
     const saved = localStorage.getItem(QUEUE_STORAGE_KEY);
-    if (saved) queue = JSON.parse(saved);
+    if (saved) {
+      const raw = JSON.parse(saved);
+      // Migrate old-format items (pre-multi-article) if needed
+      queue = raw.map(item => {
+        if (!item.articles && item.article) {
+          return {
+            ...item,
+            articles: [{
+              code: item.article,
+              label: null,
+              property_to_class: item.propertyToClass || {},
+              prop_val_to_class: item.propValToClass || {},
+              seed_token: item.seedToken || null,
+            }],
+            selectedArticleCodes: [item.article],
+            selectedProperties: item.selectedProperties || {},
+            childResolutions: item.childResolutions || {},
+          };
+        }
+        return item;
+      });
+    }
   } catch { queue = []; }
 }
 
@@ -51,8 +74,7 @@ const seedFileInput    = document.getElementById('seedFile');
 const seedDropLabel    = document.getElementById('seedDropLabel');
 const parseSeedBtn     = document.getElementById('parseSeedBtn');
 const seedStatus       = document.getElementById('seedStatus');
-const seedInfo         = document.getElementById('seedInfo');
-const seedInfoText     = document.getElementById('seedInfoText');
+const tabStrip         = document.getElementById('tabStrip');
 const dimensionArea    = document.getElementById('dimensionArea');
 const dimensionColumns = document.getElementById('dimensionColumns');
 const actionRow        = document.getElementById('actionRow');
@@ -143,36 +165,105 @@ parseSeedBtn.addEventListener('click', async () => {
   seedStatus.textContent = '';
   parseSeedBtn.disabled = false;
 
-  seedInfo.classList.remove('hidden');
-  seedInfoText.textContent =
-    `Article: ${currentSeed.article} · Manufacturer: ${currentSeed.manufacturer}`
-    + ` · Series: ${currentSeed.series} · ${currentSeed.property_columns.length} properties`;
+  // Initialise per-group state
+  groupStates = currentSeed.groups.map(() => ({
+    articleSelections: null,   // null = all checked (default); set on first change
+    dimSelections: {},         // { propName: [checkedValues] }
+  }));
+  currentGroupIndex = 0;
 
+  tabStrip.classList.remove('hidden');
   dimensionArea.classList.remove('hidden');
   actionRow.classList.remove('hidden');
+
+  renderTabStrip();
   renderDimensions();
   addToQueueBtn.disabled = false;
   updateFilenamePreview();
 });
+
+// ── Tab strip ─────────────────────────────────────────────────────────────────
+function renderTabStrip() {
+  tabStrip.innerHTML = '';
+  if (!currentSeed) return;
+
+  const nav = document.createElement('div');
+  nav.className = 'flex gap-1 flex-wrap';
+
+  currentSeed.groups.forEach((group, idx) => {
+    const codes = group.articles.map(a => a.code);
+    const label = codes.length === 1 ? codes[0] : codes.join(', ');
+
+    const btn = document.createElement('button');
+    btn.className = [
+      'px-3 py-1.5 rounded text-sm font-medium border transition-colors',
+      idx === currentGroupIndex
+        ? 'bg-blue-600 text-white border-blue-600'
+        : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400 hover:text-blue-600',
+    ].join(' ');
+    btn.textContent = `${label} · ${group.property_columns.length} properties`;
+    btn.addEventListener('click', () => switchTab(idx));
+    nav.appendChild(btn);
+  });
+
+  tabStrip.appendChild(nav);
+}
+
+function switchTab(idx) {
+  if (!currentSeed || idx === currentGroupIndex) return;
+  _saveGroupState();
+  currentGroupIndex = idx;
+  renderTabStrip();
+  renderDimensions();
+  updateFilenamePreview();
+}
+
+function _saveGroupState() {
+  if (!currentSeed || !groupStates[currentGroupIndex]) return;
+  const state = groupStates[currentGroupIndex];
+
+  // Save article selections
+  state.articleSelections = _getArticleSelections();
+
+  // Save dimension selections
+  const dims = {};
+  document.querySelectorAll('.dim-check:checked').forEach(cb => {
+    if (!dims[cb.dataset.prop]) dims[cb.dataset.prop] = [];
+    dims[cb.dataset.prop].push(cb.dataset.value);
+  });
+  state.dimSelections = dims;
+}
 
 // ── Dimension columns ──────────────────────────────────────────────────────────
 function renderDimensions() {
   dimensionColumns.innerHTML = '';
   if (!currentSeed) return;
 
+  const group = currentSeed.groups[currentGroupIndex];
+  if (!group) return;
+
+  const state = groupStates[currentGroupIndex] || {};
+
+  // Article column — only shown for groups with 2+ articles
+  if (group.articles.length > 1) {
+    dimensionColumns.appendChild(_buildArticleColumn(group.articles, state.articleSelections));
+  }
+
   const parentHasChild = new Map();
-  for (const col of currentSeed.property_columns) {
+  for (const col of group.property_columns) {
     if (col.is_child) parentHasChild.set(col.parent, col.name);
   }
 
-  for (const col of currentSeed.property_columns) {
+  for (const col of group.property_columns) {
     if (col.is_child) continue;
     const wrapper = document.createElement('div');
     wrapper.className = 'flex flex-col gap-1';
-    wrapper.appendChild(_buildCheckboxColumn(col.name, col.values, col.seed_value));
+    wrapper.appendChild(
+      _buildCheckboxColumn(col.name, col.values, col.seed_value, state.dimSelections)
+    );
     const childName = parentHasChild.get(col.name);
     if (childName) {
-      const childCol = currentSeed.property_columns.find(c => c.name === childName);
+      const childCol = group.property_columns.find(c => c.name === childName);
       if (childCol) wrapper.appendChild(_buildChildColumn(childCol));
     }
     dimensionColumns.appendChild(wrapper);
@@ -180,10 +271,14 @@ function renderDimensions() {
   updatePermCount();
 }
 
-function _buildCheckboxColumn(propName, values, seedValue) {
+function _buildCheckboxColumn(propName, values, seedValue, savedDimSelections) {
   const col = document.createElement('div');
   col.className = 'bg-white rounded-lg shadow p-3 min-w-44 max-w-56 flex flex-col';
   col.dataset.propName = propName;
+
+  // Use saved selections if present; otherwise pre-check seed value
+  const savedVals = savedDimSelections && savedDimSelections[propName];
+
   col.innerHTML = `
     <div class="font-semibold text-sm text-gray-700 mb-2 border-b pb-1" title="${escapeHtml(propName)}">${escapeHtml(propName)}</div>
     <div class="flex gap-1 mb-2">
@@ -192,13 +287,18 @@ function _buildCheckboxColumn(propName, values, seedValue) {
       <button class="text-xs text-blue-600 hover:underline select-none-btn">None</button>
     </div>
     <div class="overflow-y-auto max-h-64 space-y-1">
-      ${values.map(v => `
-        <label class="flex items-center gap-1 text-xs text-gray-700 cursor-pointer">
-          <input type="checkbox" class="dim-check" data-prop="${escapeHtml(propName)}" data-value="${escapeHtml(v.code)}"
-            ${v.code === seedValue ? 'checked' : ''}>
-          <span class="font-mono text-gray-500">${escapeHtml(v.code)}</span>
-          ${v.label && v.label !== v.code ? `<span class="text-gray-300">·</span><span class="truncate">${escapeHtml(v.label)}</span>` : ''}
-        </label>`).join('')}
+      ${values.map(v => {
+        const isChecked = savedVals
+          ? savedVals.includes(v.code)
+          : v.code === seedValue;
+        return `
+          <label class="flex items-center gap-1 text-xs text-gray-700 cursor-pointer">
+            <input type="checkbox" class="dim-check" data-prop="${escapeHtml(propName)}" data-value="${escapeHtml(v.code)}"
+              ${isChecked ? 'checked' : ''}>
+            <span class="font-mono text-gray-500">${escapeHtml(v.code)}</span>
+            ${v.label && v.label !== v.code ? `<span class="text-gray-300">·</span><span class="truncate">${escapeHtml(v.label)}</span>` : ''}
+          </label>`;
+      }).join('')}
     </div>`;
   col.querySelector('.select-all-btn').addEventListener('click', () => {
     col.querySelectorAll('.dim-check').forEach(cb => { cb.checked = true; });
@@ -219,9 +319,11 @@ function onDimensionChange() {
 
 function _updateChildSections() {
   if (!currentSeed) return;
+  const group = currentSeed.groups[currentGroupIndex];
+  if (!group) return;
   const sel = getParentSelections();
 
-  for (const childCol of currentSeed.property_columns.filter(c => c.is_child)) {
+  for (const childCol of group.property_columns.filter(c => c.is_child)) {
     const checkedParentVals = new Set(sel[childCol.parent] || []);
     const colEl = dimensionColumns.querySelector(`[data-prop-name="${CSS.escape(childCol.name)}"]`);
     if (!colEl) continue;
@@ -239,7 +341,6 @@ function _updateChildSections() {
         lbl.classList.toggle('text-gray-700', active);
         lbl.classList.toggle('cursor-pointer', active);
       });
-      // Dim the section header when inactive
       const header = section.querySelector('.section-header');
       if (header) {
         header.classList.toggle('text-gray-300', !active);
@@ -302,6 +403,50 @@ function _buildChildColumn(col) {
   return el;
 }
 
+function _buildArticleColumn(articles, savedSelections) {
+  const col = document.createElement('div');
+  col.className = 'bg-white rounded-lg shadow p-3 min-w-44 max-w-56 flex flex-col';
+  col.dataset.propName = '__article__';
+
+  // All checked by default; restore saved state if present
+  const checkedSet = savedSelections
+    ? new Set(savedSelections)
+    : new Set(articles.map(a => a.code));
+
+  col.innerHTML = `
+    <div class="font-semibold text-sm text-gray-700 mb-2 border-b pb-1">Article</div>
+    <div class="flex gap-1 mb-2">
+      <button class="text-xs text-blue-600 hover:underline select-all-btn">All</button>
+      <span class="text-gray-300">|</span>
+      <button class="text-xs text-blue-600 hover:underline select-none-btn">None</button>
+    </div>
+    <div class="overflow-y-auto max-h-64 space-y-1">
+      ${articles.map(a => `
+        <label class="flex items-center gap-1 text-xs text-gray-700 cursor-pointer">
+          <input type="checkbox" class="article-check" data-code="${escapeHtml(a.code)}"
+            ${checkedSet.has(a.code) ? 'checked' : ''}>
+          <span class="font-mono text-gray-500">${escapeHtml(a.code)}</span>
+          ${a.label ? `<span class="text-gray-300">·</span><span class="truncate">${escapeHtml(a.label)}</span>` : ''}
+        </label>`).join('')}
+    </div>`;
+
+  col.querySelector('.select-all-btn').addEventListener('click', () => {
+    col.querySelectorAll('.article-check').forEach(cb => { cb.checked = true; });
+    onDimensionChange();
+  });
+  col.querySelector('.select-none-btn').addEventListener('click', () => {
+    col.querySelectorAll('.article-check').forEach(cb => { cb.checked = false; });
+    onDimensionChange();
+  });
+  col.querySelectorAll('.article-check').forEach(cb => cb.addEventListener('change', onDimensionChange));
+  return col;
+}
+
+function _getArticleSelections() {
+  const checked = [];
+  document.querySelectorAll('.article-check:checked').forEach(cb => checked.push(cb.dataset.code));
+  return checked.length > 0 ? checked : null;
+}
 
 // ── Permutation counter ────────────────────────────────────────────────────────
 function getParentSelections() {
@@ -315,8 +460,10 @@ function getParentSelections() {
 
 function getChildSelections() {
   if (!currentSeed) return {};
+  const group = currentSeed.groups[currentGroupIndex];
+  if (!group) return {};
   const result = {};
-  for (const col of currentSeed.property_columns) {
+  for (const col of group.property_columns) {
     if (!col.is_child) continue;
     const resolution = {};
     for (const parentVal of Object.keys(col.mapping || {})) {
@@ -334,24 +481,31 @@ function getChildSelections() {
 function updatePermCount() {
   if (!currentSeed) { permCount.textContent = ''; return; }
 
+  const group = currentSeed.groups[currentGroupIndex];
+  if (!group) return;
+
   const sel = getParentSelections();
   const childSel = getChildSelections();
 
-  // Which props are parents of a child?
   const parentProps = new Set(
-    currentSeed.property_columns.filter(c => c.is_child).map(c => c.parent)
+    group.property_columns.filter(c => c.is_child).map(c => c.parent)
   );
 
-  // Standalone dimensions: not a child and not a parent of a child
   const factors = [];
-  for (const col of currentSeed.property_columns) {
+
+  // Article dimension (only relevant for multi-article groups)
+  if (group.articles.length > 1) {
+    const articleCount = document.querySelectorAll('.article-check:checked').length;
+    if (articleCount > 0) factors.push(articleCount);
+  }
+
+  for (const col of group.property_columns) {
     if (col.is_child || parentProps.has(col.name)) continue;
     const n = (sel[col.name] || []).length;
     if (n > 0) factors.push(n);
   }
 
-  // Parent-child pair expansion: Σ max(1, child_count) per selected parent value
-  for (const childCol of currentSeed.property_columns.filter(c => c.is_child)) {
+  for (const childCol of group.property_columns.filter(c => c.is_child)) {
     const parentVals = sel[childCol.parent] || [];
     if (parentVals.length === 0) continue;
     const resolution = childSel[childCol.name]?.resolution || {};
@@ -363,57 +517,103 @@ function updatePermCount() {
   }
 
   const count = factors.length ? factors.reduce((a, b) => a * b, 1) : 0;
-  currentPermCount = count;  // stored for use by addToQueueBtn handler
+  currentPermCount = count;
   permCount.textContent = `${count.toLocaleString()} permutations`;
   permCount.className = 'text-sm font-medium ' + (
     count > ERROR_LIMIT ? 'text-red-600' :
     count > WARN_LIMIT  ? 'text-amber-600' : 'text-gray-700'
   );
   if (count > ERROR_LIMIT) permCount.textContent += ` ⚠ Consider splitting (max: ${ERROR_LIMIT})`;
+
+  // Disable Add to Queue if no articles selected in multi-article groups
+  if (group.articles.length > 1) {
+    const articleCount = document.querySelectorAll('.article-check:checked').length;
+    addToQueueBtn.disabled = articleCount === 0 || count === 0;
+  } else {
+    addToQueueBtn.disabled = count === 0;
+  }
+
   updateFilenamePreview();
 }
 
 function updateFilenamePreview() {
   if (!currentSeed) { filenamePreview.textContent = ''; return; }
+  const group = currentSeed.groups[currentGroupIndex];
+  if (!group) return;
   filenamePreview.textContent = assembleFilename(
-    currentSeed.series, currentSeed.article, articleLabel.value, 'Raw'
+    currentSeed.series, _resolveArticleToken(group), articleLabel.value, 'Raw'
   );
 }
+
+function _resolveArticleToken(group) {
+  if (group.articles.length === 1) return group.articles[0].code;
+  const checked = document.querySelectorAll('.article-check:checked');
+  if (checked.length === 1) return checked[0].dataset.code;
+  return 'multiple_articles';
+}
+
 articleLabel.addEventListener('input', updateFilenamePreview);
 
 // ── Class maps ─────────────────────────────────────────────────────────────────
 function buildClassMaps() {
   if (!currentSeed) return { propertyToClass: {}, propValToClass: {} };
-  const propertyToClass = {}, propValToClass = {};
-  for (const col of currentSeed.property_columns) {
-    propertyToClass[col.name] = col.article_class;
-    for (const v of col.values) propValToClass[`${col.name}=${v.code}`] = col.article_class;
-  }
-  return { propertyToClass, propValToClass };
+  const group = currentSeed.groups[currentGroupIndex];
+  if (!group) return { propertyToClass: {}, propValToClass: {} };
+  // Use the first article's class maps for display purposes; per-article maps are
+  // sent to the server via the articles array.
+  const first = group.articles[0];
+  return {
+    propertyToClass: { ...first.property_to_class },
+    propValToClass: { ...first.prop_val_to_class },
+  };
 }
 
 // ── Add to queue ───────────────────────────────────────────────────────────────
 addToQueueBtn.addEventListener('click', () => {
   if (!currentSeed) return;
+  const group = currentSeed.groups[currentGroupIndex];
+  if (!group) return;
+
   const parentSelections = getParentSelections();
-  const { propertyToClass, propValToClass } = buildClassMaps();
   const label = articleLabel.value.trim();
+
+  // Determine selected articles
+  let selectedArticles;
+  if (group.articles.length === 1) {
+    selectedArticles = group.articles;
+  } else {
+    const checkedCodes = new Set(
+      [...document.querySelectorAll('.article-check:checked')].map(cb => cb.dataset.code)
+    );
+    selectedArticles = group.articles.filter(a => checkedCodes.has(a.code));
+  }
+  if (selectedArticles.length === 0) return;
+
+  const articleToken = selectedArticles.length === 1
+    ? selectedArticles[0].code
+    : 'multiple_articles';
+
+  const filename = assembleFilename(currentSeed.series, articleToken, label, 'Raw');
 
   queue.push({
     id: crypto.randomUUID(),
     state: 'red',
     label,
-    filename: assembleFilename(currentSeed.series, currentSeed.article, label, 'Raw'),
-    article: currentSeed.article,
+    filename,
     series: currentSeed.series,
     manufacturer: currentSeed.manufacturer,
-    articleClass: currentSeed.property_columns[0]?.article_class || '',
-    propertyToClass,
-    propValToClass,
+    // Multi-article fields
+    articles: selectedArticles.map(a => ({
+      code: a.code,
+      label: a.label,
+      property_to_class: a.property_to_class,
+      prop_val_to_class: a.prop_val_to_class,
+      seed_token: a.seed_token,
+    })),
+    selectedArticleCodes: selectedArticles.map(a => a.code),
     selectedProperties: parentSelections,
     childResolutions: getChildSelections(),
     count: currentPermCount,
-    seedToken: currentSeed.seed_token ?? null,
     keptCount: null,
     removedCount: null,
   });
@@ -439,24 +639,33 @@ function renderQueue() {
 
 function buildCard(item) {
   const card = document.createElement('div');
-  card.className = 'queue-card rounded-lg p-3 w-56 flex-shrink-0 flex flex-col gap-2 border-2';
+  card.className = 'queue-card rounded-lg p-3 w-56 flex-shrink-0 flex flex-col gap-2 border-2 relative';
   card.dataset.id = item.id;
+
+  // Always-present delete button in top-right corner
+  const deleteBtn = document.createElement('button');
+  deleteBtn.className = 'absolute top-1.5 right-1.5 text-gray-400 hover:text-red-500 text-xs w-5 h-5 flex items-center justify-center rounded hover:bg-red-50';
+  deleteBtn.textContent = '✕';
+  deleteBtn.title = 'Remove from queue';
+  deleteBtn.addEventListener('click', () => removeItem(item.id));
+  card.appendChild(deleteBtn);
 
   if (item.state === 'red') {
     card.classList.add('border-red-400', 'bg-red-50');
-    card.innerHTML = `
+    const inner = document.createElement('div');
+    inner.className = 'flex flex-col gap-2 pr-5';
+    inner.innerHTML = `
       <div class="text-xs font-mono text-gray-700 truncate" title="${escapeHtml(item.filename)}">${escapeHtml(item.filename)}</div>
       <div class="text-xs text-gray-500">${item.count.toLocaleString()} permutations</div>
-      <div class="flex gap-1">
-        <button class="generate-one-btn flex-1 bg-red-600 text-white px-2 py-1 rounded text-xs hover:bg-red-700">Generate</button>
-        <button class="remove-btn text-red-400 hover:text-red-600 px-1">✕</button>
-      </div>`;
-    card.querySelector('.generate-one-btn').addEventListener('click', () => generateOne(item.id));
-    card.querySelector('.remove-btn').addEventListener('click', () => removeItem(item.id));
+      <button class="generate-one-btn w-full bg-red-600 text-white px-2 py-1 rounded text-xs hover:bg-red-700">Generate</button>`;
+    card.appendChild(inner);
+    inner.querySelector('.generate-one-btn').addEventListener('click', () => generateOne(item.id));
 
   } else if (item.state === 'orange') {
     card.classList.add('border-amber-400', 'bg-amber-50');
-    card.innerHTML = `
+    const inner = document.createElement('div');
+    inner.className = 'flex flex-col gap-2 pr-5';
+    inner.innerHTML = `
       <div class="text-xs font-mono text-gray-600 truncate" title="${escapeHtml(item.filename)}">${escapeHtml(item.filename)}</div>
       <div class="text-xs text-amber-700 font-medium">Waiting for pCon export</div>
       <div class="clean-drop-zone border-2 border-dashed border-amber-300 rounded p-3 text-center text-xs text-amber-600 cursor-pointer hover:bg-amber-100 transition-colors">
@@ -464,9 +673,10 @@ function buildCard(item) {
         <input type="file" accept=".obx,.xml" class="hidden clean-file-input">
       </div>
       <button class="regenerate-btn w-full text-xs text-gray-500 hover:text-gray-700 border rounded px-2 py-1">Re-generate</button>`;
+    card.appendChild(inner);
 
-    const dropZone = card.querySelector('.clean-drop-zone');
-    const fileInput = card.querySelector('.clean-file-input');
+    const dropZone = inner.querySelector('.clean-drop-zone');
+    const fileInput = inner.querySelector('.clean-file-input');
     dropZone.addEventListener('click', () => fileInput.click());
     dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('bg-amber-200'); });
     dropZone.addEventListener('dragleave', () => dropZone.classList.remove('bg-amber-200'));
@@ -478,16 +688,22 @@ function buildCard(item) {
     fileInput.addEventListener('change', () => {
       if (fileInput.files[0]) cleanItem(item.id, fileInput.files[0]);
     });
-    card.querySelector('.regenerate-btn').addEventListener('click', () => revertToRed(item.id));
+    inner.querySelector('.regenerate-btn').addEventListener('click', () => revertToRed(item.id));
 
   } else if (item.state === 'green') {
     card.classList.add('border-green-400', 'bg-green-50');
-    const cleanName = assembleFilename(item.series, item.article, item.label, 'Clean');
-    card.innerHTML = `
+    const articleToken = item.selectedArticleCodes?.length === 1
+      ? item.selectedArticleCodes[0]
+      : 'multiple_articles';
+    const cleanName = assembleFilename(item.series, articleToken, item.label, 'Clean');
+    const inner = document.createElement('div');
+    inner.className = 'flex flex-col gap-2 pr-5';
+    inner.innerHTML = `
       <div class="text-xs font-mono text-gray-700 truncate" title="${escapeHtml(cleanName)}">${escapeHtml(cleanName)}</div>
       <div class="text-xs text-green-700 font-medium">✓ ${item.keptCount} kept · ${item.removedCount} removed</div>
       <button class="done-btn w-full bg-green-600 text-white px-2 py-1 rounded text-xs hover:bg-green-700">Done</button>`;
-    card.querySelector('.done-btn').addEventListener('click', () => removeItem(item.id));
+    card.appendChild(inner);
+    inner.querySelector('.done-btn').addEventListener('click', () => removeItem(item.id));
   }
 
   return card;
@@ -531,9 +747,12 @@ generateAllBtn.addEventListener('click', async () => {
   generateStatus.classList.remove('hidden');
   generateStatus.textContent = 'Building…';
 
+  const articleToken = redItems.length === 1 && redItems[0].selectedArticleCodes?.length === 1
+    ? redItems[0].selectedArticleCodes[0]
+    : 'multiple_articles';
   const filename = redItems.length === 1
     ? redItems[0].filename
-    : assembleZipFilename(redItems[0].series, redItems[0].article).replace('.zip', '.obx');
+    : assembleZipFilename(redItems[0].series, articleToken).replace('.zip', '.obx');
 
   const ok = await _doGenerate(redItems, filename);
   if (ok) {
@@ -551,12 +770,9 @@ async function _doGenerate(items, filename) {
     manufacturer: items[0].manufacturer,
     series: items[0].series,
     filename,
-    seed_token: items[0].seedToken ?? null,
     queue: items.map(e => ({
-      article: e.article,
-      article_class: e.articleClass,
-      property_to_class: e.propertyToClass,
-      prop_val_to_class: e.propValToClass,
+      articles: e.articles,
+      selected_article_codes: e.selectedArticleCodes,
       selected_properties: e.selectedProperties,
       child_resolutions: e.childResolutions || {},
       filename: e.filename,
@@ -592,7 +808,10 @@ async function _doGenerate(items, filename) {
   const a = document.createElement('a');
   a.href = url;
   a.download = contentType.includes('zip')
-    ? assembleZipFilename(items[0].series, items[0].article)
+    ? assembleZipFilename(
+        items[0].series,
+        items[0].selectedArticleCodes?.length === 1 ? items[0].selectedArticleCodes[0] : 'multiple_articles'
+      )
     : filename;
   a.click();
   URL.revokeObjectURL(url);
@@ -638,7 +857,12 @@ async function cleanItem(id, file) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = assembleFilename(item.series, item.article, item.label, 'Clean');
+  a.download = assembleFilename(
+    item.series,
+    item.selectedArticleCodes?.length === 1 ? item.selectedArticleCodes[0] : 'multiple_articles',
+    item.label,
+    'Clean'
+  );
   a.click();
   URL.revokeObjectURL(url);
 
