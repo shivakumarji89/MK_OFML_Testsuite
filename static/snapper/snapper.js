@@ -1,6 +1,6 @@
 // ── Constants ──────────────────────────────────────────────────────────────────
-const WARN_LIMIT = 200;
-const ERROR_LIMIT = 500;
+const WARN_LIMIT = 1500;
+const ERROR_LIMIT = 5000;
 const QUEUE_STORAGE_KEY = 'snapper_queue';
 
 // ── HTML safety ────────────────────────────────────────────────────────────────
@@ -87,12 +87,54 @@ const emptyQueueMsg    = document.getElementById('emptyQueueMsg');
 const generateAllBtn   = document.getElementById('generateAllBtn');
 const generateStatus   = document.getElementById('generateStatus');
 
-// ── Repo path persistence ──────────────────────────────────────────────────────
+// ── Repo path — init from localStorage ────────────────────────────────────
 repoPathInput.value = localStorage.getItem('repoPath') || '';
+
+// ── Repo dropdown ──────────────────────────────────────────────────────────
+const repoDropdownWrapper = document.getElementById('repoDropdownWrapper');
+const repoSelect          = document.getElementById('repoSelect');
+
+function buildRepoDropdown() {
+  const repos = Settings.getSavedRepos();
+  if (!repos.length) {
+    repoDropdownWrapper.classList.add('hidden');
+    return;
+  }
+  repoDropdownWrapper.classList.remove('hidden');
+
+  // Match current path to a saved repo, or fall back to custom
+  const currentPath = repoPathInput.value.trim();
+  const matchedId = repos.find(r => r.path === currentPath)?.id || '__custom__';
+
+  repoSelect.innerHTML =
+    repos.map(r => `<option value="${r.id}">${r.name}</option>`).join('') +
+    '<option value="__custom__">— Custom path —</option>';
+  repoSelect.value = matchedId;
+}
+
+repoSelect.addEventListener('change', () => {
+  const id = repoSelect.value;
+  if (id === '__custom__') return;
+  const repo = Settings.getSavedRepos().find(r => r.id === id);
+  if (repo) {
+    repoPathInput.value = repo.path;
+    localStorage.setItem('repoPath', repo.path);
+    updateParseSeedBtn();
+  }
+});
+
 repoPathInput.addEventListener('input', () => {
   localStorage.setItem('repoPath', repoPathInput.value.trim());
+  // Snap dropdown to Custom if the typed path doesn't match any saved repo
+  const repos = Settings.getSavedRepos();
+  const match = repos.find(r => r.path === repoPathInput.value.trim());
+  if (!match && repoSelect.value !== '__custom__') repoSelect.value = '__custom__';
   updateParseSeedBtn();
 });
+
+document.addEventListener('settings:savedReposChanged', buildRepoDropdown);
+
+buildRepoDropdown();
 
 // ── Seed drag-and-drop ─────────────────────────────────────────────────────────
 seedDropZone.addEventListener('click', () => seedFileInput.click());
@@ -138,6 +180,7 @@ parseSeedBtn.addEventListener('click', async () => {
   if (!repo) { alert('Please enter the repository path first.'); return; }
 
   parseSeedBtn.disabled = true;
+  seedStatus.className = 'text-sm text-gray-500';
   seedStatus.textContent = 'Parsing…';
 
   const formData = new FormData();
@@ -162,7 +205,12 @@ parseSeedBtn.addEventListener('click', async () => {
 
   currentSeed = await response.json();
 
-  seedStatus.textContent = '';
+  if (currentSeed.info_messages && currentSeed.info_messages.length) {
+    seedStatus.textContent = currentSeed.info_messages.join(' | ');
+    seedStatus.className = 'text-sm text-amber-600';
+  } else {
+    seedStatus.textContent = '';
+  }
   parseSeedBtn.disabled = false;
 
   // Initialise per-group state
@@ -484,13 +532,6 @@ function updatePermCount() {
   const group = currentSeed.groups[currentGroupIndex];
   if (!group) return;
 
-  const sel = getParentSelections();
-  const childSel = getChildSelections();
-
-  const parentProps = new Set(
-    group.property_columns.filter(c => c.is_child).map(c => c.parent)
-  );
-
   const factors = [];
 
   // Article dimension (only relevant for multi-article groups)
@@ -499,21 +540,21 @@ function updatePermCount() {
     if (articleCount > 0) factors.push(articleCount);
   }
 
+  // Each property column contributes the count of its ticked checkboxes.
+  // Child columns: count ticked child-check boxes (0 = no explicit selection → treated as ×1, i.e. default applies).
+  // Parent columns: count ticked dim-check boxes.
   for (const col of group.property_columns) {
-    if (col.is_child || parentProps.has(col.name)) continue;
-    const n = (sel[col.name] || []).length;
-    if (n > 0) factors.push(n);
-  }
-
-  for (const childCol of group.property_columns.filter(c => c.is_child)) {
-    const parentVals = sel[childCol.parent] || [];
-    if (parentVals.length === 0) continue;
-    const resolution = childSel[childCol.name]?.resolution || {};
-    let expansion = 0;
-    for (const pv of parentVals) {
-      expansion += Math.max(1, (resolution[pv] || []).length);
+    let n;
+    if (col.is_child) {
+      n = dimensionColumns.querySelectorAll(
+        `.child-check[data-prop="${CSS.escape(col.name)}"]:checked`
+      ).length;
+    } else {
+      n = dimensionColumns.querySelectorAll(
+        `.dim-check[data-prop="${CSS.escape(col.name)}"]:checked`
+      ).length;
     }
-    factors.push(expansion);
+    if (n > 0) factors.push(n);
   }
 
   const count = factors.length ? factors.reduce((a, b) => a * b, 1) : 0;
@@ -523,7 +564,7 @@ function updatePermCount() {
     count > ERROR_LIMIT ? 'text-red-600' :
     count > WARN_LIMIT  ? 'text-amber-600' : 'text-gray-700'
   );
-  if (count > ERROR_LIMIT) permCount.textContent += ` ⚠ Consider splitting (max: ${ERROR_LIMIT})`;
+  if (count > ERROR_LIMIT) permCount.textContent += ` ⚠ Consider splitting (max: ${ERROR_LIMIT.toLocaleString()})`;
 
   // Disable Add to Queue if no articles selected in multi-article groups
   if (group.articles.length > 1) {

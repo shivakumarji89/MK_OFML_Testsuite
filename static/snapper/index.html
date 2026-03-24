@@ -12,6 +12,10 @@
     <div id="settingsHeaderRow" class="max-w-full px-6 py-3 flex flex-wrap items-end gap-4">
       <a href="/" class="text-sm text-blue-600 hover:underline mr-2">← Home</a>
       <h1 class="text-lg font-bold text-gray-800 mr-4">Snapper File Generator</h1>
+      <div id="repoDropdownWrapper" class="hidden">
+        <label class="block text-xs text-gray-500 mb-1">Saved repository</label>
+        <select id="repoSelect" class="border rounded px-2 py-1 text-sm"></select>
+      </div>
       <div>
         <label class="block text-xs text-gray-500 mb-1">Repository path</label>
         <input id="repoPath" type="text"
@@ -124,7 +128,10 @@
   <script src="/static/snapper/snapper.js"></script>
   <script src="/static/settings.js"></script>
   <script>
-    initSettingsGear(document.getElementById('settingsHeaderRow'));
+    initSettingsGear(
+      document.getElementById('settingsHeaderRow'),
+      { getCurrentPath: () => document.getElementById('repoPath').value.trim() }
+    );
   </script>
 </body>
 </html>
