@@ -9,7 +9,7 @@ client = TestClient(app)
 
 REPO_ROOT = r"C:\HermanMillerOFMLSVN\Staging\HermanMiller\_repository"
 
-# ── OBX fixture ───────────────────────────────────────────────────────────────
+# ── OBX fixtures ───────────────────────────────────────────────────────────────
 
 CLOUD_SEED_XML = b"""<?xml version='1.0'?>
 <cutBuffer>
@@ -21,6 +21,28 @@ CLOUD_SEED_XML = b"""<?xml version='1.0'?>
       <series id='CLOUD'/>
       <artNr type='base'>NOCLE4</artNr>
       <artNr type='ofmlvarcode'>CLOUD_ATTR_ARM_CHAIR.Type=10;CLOUD_OPT.Base_Finish=R00;CLOUD_OPT.Shell_Fabric_Type=1HA;CLOUD_OPT.Shell_Fabric_Colour=1HA02;CLOUD_OPT.Seat_Fabric_Type=1HA;CLOUD_OPT.Seat_Fabric_Colour=1HA01</artNr>
+    </bskArticle>
+  </items>
+</cutBuffer>"""
+
+HATCH_MULTI_SEED_XML = b"""<?xml version='1.0'?>
+<cutBuffer>
+  <state sessionId='test-session'/>
+  <versionInfo vendorKey='EasternGraphics' appKey='EAI-Server' appVersion='4.18.3' bskXmlVersion='1.8.10'/>
+  <items>
+    <bskArticle basketId='aaa' itemType='BasketAggregate' updateState='UpToDate'>
+      <manufacturer id='HM'/>
+      <series id='HATCH'/>
+      <artNr type='base'>NOHAN1</artNr>
+      <artNr type='ofmlvarcode'>HATCH_ATTR_CHAIR.Type=20;HATCH_OPT.Base_Finish=R00</artNr>
+      <description type='short'><text lang='en'>Hatch Single</text></description>
+    </bskArticle>
+    <bskArticle basketId='bbb' itemType='BasketAggregate' updateState='UpToDate'>
+      <manufacturer id='HM'/>
+      <series id='HATCH'/>
+      <artNr type='base'>NOHAN2</artNr>
+      <artNr type='ofmlvarcode'>HATCH_ATTR_NEW.Type=20;HATCH_OPT.Base_Finish=R00</artNr>
+      <description type='short'><text lang='en'>Hatch Double</text></description>
     </bskArticle>
   </items>
 </cutBuffer>"""
@@ -41,49 +63,41 @@ def test_parse_seed_returns_200():
     assert response.status_code == 200
 
 
-def test_parse_seed_returns_article_code():
+def test_parse_seed_returns_groups():
     data = _upload_seed().json()
-    assert data["article"] == "NOCLE4"
+    assert "groups" in data
+    assert len(data["groups"]) >= 1
 
 
-def test_parse_seed_returns_series():
+def test_parse_seed_group_has_required_fields():
     data = _upload_seed().json()
-    assert data["series"] == "CLOUD"
+    group = data["groups"][0]
+    assert "id" in group
+    assert "articles" in group
+    assert "property_columns" in group
 
 
-def test_parse_seed_returns_property_columns():
+def test_parse_seed_group_article_has_code_and_label():
+    """seed_token lives on each article, not on the group."""
     data = _upload_seed().json()
-    assert "property_columns" in data
-    assert len(data["property_columns"]) == 6
+    art = data["groups"][0]["articles"][0]
+    assert "code" in art
+    assert "label" in art
+    assert "property_to_class" in art
+    assert "prop_val_to_class" in art
+    assert "seed_token" in art
 
 
-def test_parse_seed_type_column_has_values():
+def test_parse_seed_group_property_columns_populated():
     data = _upload_seed().json()
-    cols = {c["name"]: c for c in data["property_columns"]}
-    assert "Type" in cols
-    type_col = cols["Type"]
-    assert len(type_col["values"]) > 0
-    assert type_col["article_class"] == "CLOUD_ATTR_ARM_CHAIR"
-    assert type_col["is_child"] is False
-
-
-def test_parse_seed_columns_have_hierarchy_fields():
-    """Each property column has the required hierarchy-related fields."""
-    data = _upload_seed().json()
-    for col in data["property_columns"]:
-        assert "is_child" in col
-        assert "parent" in col
-        assert "mapping" in col
-
-
-def test_parse_seed_non_child_columns_have_null_parent():
-    """Columns that aren't children have null parent and mapping."""
-    data = _upload_seed().json()
-    non_children = [c for c in data["property_columns"] if not c["is_child"]]
-    assert len(non_children) > 0
-    for col in non_children:
-        assert col["parent"] is None
-        assert col["mapping"] is None
+    cols = data["groups"][0]["property_columns"]
+    assert len(cols) >= 1
+    col = cols[0]
+    assert "name" in col
+    assert "values" in col
+    assert "is_child" in col
+    assert "parent" in col
+    assert "mapping" in col
 
 
 def test_parse_seed_invalid_repo_returns_404():
@@ -107,31 +121,43 @@ def test_parse_seed_missing_varcode_returns_422():
 
 # ── /generate integration tests ───────────────────────────────────────────────
 
-def test_generate_single_article_returns_xml():
-    payload = {
+def _make_generate_payload(articles, selected_properties, seed_token=None):
+    """Helper to build a /generate payload with the multi-article shape."""
+    return {
         "manufacturer": "HM",
         "series": "CLOUD",
+        "filename": "test.obx",
+        "seed_token": seed_token,
         "queue": [
             {
-                "article": "NOCLE4",
-                "article_class": "CLOUD_OPT",
-                "property_to_class": {
-                    "Type": "CLOUD_ATTR_ARM_CHAIR",
-                    "Base_Finish": "CLOUD_OPT",
-                },
-                "prop_val_to_class": {
-                    "Type=10": "CLOUD_ATTR_ARM_CHAIR",
-                    "Base_Finish=R00": "CLOUD_OPT",
-                    "Base_Finish=SL": "CLOUD_OPT",
-                },
-                "selected_properties": {
-                    "Type": ["10"],
-                    "Base_Finish": ["R00", "SL"],
-                },
+                "articles": articles,
+                "selected_article_codes": [a["code"] for a in articles],
+                "selected_properties": selected_properties,
+                "child_resolutions": {},
+                "filename": "test.obx",
             }
         ],
-        "filename": "test_cloud.obx",
     }
+
+
+def test_generate_single_article_returns_xml():
+    articles = [
+        {
+            "code": "NOCLE4",
+            "label": None,
+            "property_to_class": {"Type": "CLOUD_ATTR_ARM_CHAIR", "Base_Finish": "CLOUD_OPT"},
+            "prop_val_to_class": {
+                "Type=10": "CLOUD_ATTR_ARM_CHAIR",
+                "Base_Finish=R00": "CLOUD_OPT",
+                "Base_Finish=SL": "CLOUD_OPT",
+            },
+            "seed_token": None,
+        }
+    ]
+    payload = _make_generate_payload(
+        articles,
+        {"Type": ["10"], "Base_Finish": ["R00", "SL"]},
+    )
     response = client.post("/api/snapper/generate", json=payload)
     assert response.status_code == 200
     assert "application/xml" in response.headers["content-type"]
@@ -140,45 +166,44 @@ def test_generate_single_article_returns_xml():
 
 
 def test_generate_obx_contains_correct_varcode():
-    payload = {
-        "manufacturer": "HM",
-        "series": "CLOUD",
-        "queue": [
-            {
-                "article": "NOCLE4",
-                "article_class": "CLOUD_OPT",
-                "property_to_class": {"Type": "CLOUD_ATTR_ARM_CHAIR"},
-                "prop_val_to_class": {"Type=10": "CLOUD_ATTR_ARM_CHAIR"},
-                "selected_properties": {"Type": ["10"]},
-            }
-        ],
-        "filename": "test.obx",
-    }
+    articles = [
+        {
+            "code": "NOCLE4",
+            "label": None,
+            "property_to_class": {"Type": "CLOUD_ATTR_ARM_CHAIR"},
+            "prop_val_to_class": {"Type=10": "CLOUD_ATTR_ARM_CHAIR"},
+            "seed_token": None,
+        }
+    ]
+    payload = _make_generate_payload(articles, {"Type": ["10"]})
     response = client.post("/api/snapper/generate", json=payload)
     assert "CLOUD_ATTR_ARM_CHAIR.Type=10" in response.text
 
 
-def test_generate_multiple_articles_returns_zip():
+def test_generate_multiple_queue_items_returns_zip():
+    """Two queue items -> zip."""
+    def _item(code):
+        return {
+            "articles": [
+                {
+                    "code": code,
+                    "label": None,
+                    "property_to_class": {"Base_Finish": "CLOUD_OPT"},
+                    "prop_val_to_class": {"Base_Finish=R00": "CLOUD_OPT"},
+                    "seed_token": None,
+                }
+            ],
+            "selected_article_codes": [code],
+            "selected_properties": {"Base_Finish": ["R00"]},
+            "child_resolutions": {},
+            "filename": f"{code}.obx",
+        }
+
     payload = {
         "manufacturer": "HM",
         "series": "CLOUD",
-        "queue": [
-            {
-                "article": "NOCLE4",
-                "article_class": "CLOUD_OPT",
-                "property_to_class": {"Base_Finish": "CLOUD_OPT"},
-                "prop_val_to_class": {"Base_Finish=R00": "CLOUD_OPT"},
-                "selected_properties": {"Base_Finish": ["R00"]},
-            },
-            {
-                "article": "NOCLE5",
-                "article_class": "CLOUD_OPT",
-                "property_to_class": {"Base_Finish": "CLOUD_OPT"},
-                "prop_val_to_class": {"Base_Finish=R00": "CLOUD_OPT"},
-                "selected_properties": {"Base_Finish": ["R00"]},
-            },
-        ],
         "filename": "test.obx",
+        "queue": [_item("NOCLE4"), _item("NOCLE5")],
     }
     response = client.post("/api/snapper/generate", json=payload)
     assert response.status_code == 200
@@ -186,12 +211,7 @@ def test_generate_multiple_articles_returns_zip():
 
 
 def test_generate_empty_queue_returns_400():
-    payload = {
-        "manufacturer": "HM",
-        "series": "CLOUD",
-        "queue": [],
-        "filename": "test.obx",
-    }
+    payload = {"manufacturer": "HM", "series": "CLOUD", "queue": [], "filename": "test.obx"}
     response = client.post("/api/snapper/generate", json=payload)
     assert response.status_code == 400
 

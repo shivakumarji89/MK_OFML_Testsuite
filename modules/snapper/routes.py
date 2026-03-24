@@ -10,7 +10,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from .reader import discover_ranges, load_range_data, _read_csv
-from .generator import compute_permutations, build_obx, build_obx_from_seed, SENTINEL
+from .generator import compute_permutations, build_obx, build_obx_from_seed, build_obx_from_multi_seed, SENTINEL
 from .seed_parser import parse_seed, SeedParseError
 from .hierarchy import detect_hierarchy, detect_hierarchy_from_tables
 
@@ -70,10 +70,6 @@ async def parse_seed_endpoint(
     file: UploadFile = File(...),
     repo: str = Form(...),
 ):
-    """
-    Parse an uploaded OBX seed file and return property columns with valid values
-    and detected hierarchy information.
-    """
     raw = await file.read()
     try:
         xml_string = raw.decode("utf-8", errors="replace")
@@ -85,7 +81,6 @@ async def parse_seed_endpoint(
     except SeedParseError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
-    # Discover db_path by matching series code (case-insensitive) against known ranges
     ranges = discover_ranges(repo)
     matched = next(
         (r for r in ranges if r["range"].lower() == seed["series"].lower()),
@@ -98,29 +93,12 @@ async def parse_seed_endpoint(
         )
     db_path = matched["db_path"]
 
-    # Load OCD data for the range
     try:
         range_data = load_range_data(db_path)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load range data: {e}")
 
-    # Build short_id -> expression map for hierarchy detection
     short_id_relations = _build_short_id_relations(db_path)
-
-    # Detect hierarchies scoped to seed properties only
-    seed_prop_names = [p["name"] for p in seed["properties"]]
-    hierarchies = detect_hierarchy(seed_prop_names, range_data["values"], short_id_relations)
-
-    # Also detect hierarchies from *_tbl.csv lookup tables (used by some ranges e.g. Always)
-    # Table-based results take precedence if the same child property is detected by both methods.
-    already_child = {h["child"] for h in hierarchies}
-    tbl_hierarchies = detect_hierarchy_from_tables(seed_prop_names, range_data["values"], db_path)
-    for h in tbl_hierarchies:
-        if h["child"] not in already_child:
-            hierarchies.append(h)
-
-    # Build lookup: child_prop_name -> hierarchy dict
-    child_map = {h["child"]: h for h in hierarchies}
 
     # Build values lookup: property_name -> list of {code, label}
     values_by_prop: dict[str, list[dict]] = {}
@@ -137,37 +115,95 @@ async def parse_seed_endpoint(
             seen[pname].add(code)
             values_by_prop[pname].append({"code": code, "label": v.get("label", code)})
 
-    # Build property_columns
-    property_columns = []
-    for prop in seed["properties"]:
-        pname = prop["name"]
-        h = child_map.get(pname)
-        is_child = h is not None
-        property_columns.append({
-            "name": pname,
-            "article_class": prop["article_class"],
-            "seed_value": prop["seed_value"],
-            "values": values_by_prop.get(pname, []),
-            "is_child": is_child,
-            "parent": h["parent"] if is_child else None,
-            "mapping": h["mapping"] if is_child else None,
+    # Group articles by their property-name signature
+    groups_map: dict[frozenset, list[dict]] = {}
+    for article in seed["articles"]:
+        sig = frozenset(p["name"] for p in article["properties"])
+        groups_map.setdefault(sig, []).append(article)
+
+    groups = []
+    for group_idx, (sig, group_articles) in enumerate(groups_map.items()):
+        # Build property_columns from the first article's property list
+        first_article = group_articles[0]
+        prop_names = [p["name"] for p in first_article["properties"]]
+
+        hierarchies = detect_hierarchy(prop_names, range_data["values"], short_id_relations)
+        already_child = {h["child"] for h in hierarchies}
+        tbl_hierarchies = detect_hierarchy_from_tables(prop_names, range_data["values"], db_path)
+        for h in tbl_hierarchies:
+            if h["child"] not in already_child:
+                hierarchies.append(h)
+        child_map = {h["child"]: h for h in hierarchies}
+
+        property_columns = []
+        for prop in first_article["properties"]:
+            pname = prop["name"]
+            h = child_map.get(pname)
+            is_child = h is not None
+            property_columns.append({
+                "name": pname,
+                "article_class": prop["article_class"],
+                "seed_value": prop["seed_value"],
+                "values": values_by_prop.get(pname, []),
+                "is_child": is_child,
+                "parent": h["parent"] if is_child else None,
+                "mapping": h["mapping"] if is_child else None,
+            })
+
+        # Build per-article info with class maps and individual seed tokens
+        articles_out = []
+        for article in group_articles:
+            property_to_class: dict[str, str] = {}
+            prop_val_to_class: dict[str, str] = {}
+            for p in article["properties"]:
+                property_to_class[p["name"]] = p["article_class"]
+                for v in values_by_prop.get(p["name"], []):
+                    prop_val_to_class[f"{p['name']}={v['code']}"] = p["article_class"]
+
+            # Wrap the single article element in a minimal cutBuffer for use as a seed template
+            article_seed_xml = (
+                f"<?xml version='1.0' encoding='UTF-8'?>"
+                f"<cutBuffer>"
+                f"<versionInfo vendorKey='EasternGraphics' appKey='EAI-Server' "
+                f"appVersion='4.18.3' bskXmlVersion='1.8.10'/>"
+                f"<items>{article['article_xml']}</items>"
+                f"</cutBuffer>"
+            )
+            article_token = str(uuid.uuid4())
+            _seed_store[article_token] = article_seed_xml
+
+            articles_out.append({
+                "code": article["article"],
+                "label": article["label"],
+                "property_to_class": property_to_class,
+                "prop_val_to_class": prop_val_to_class,
+                "seed_token": article_token,
+            })
+
+        groups.append({
+            "id": f"group-{group_idx}",
+            "articles": articles_out,
+            "property_columns": property_columns,
         })
 
-    seed_token = str(uuid.uuid4())
-    _seed_store[seed_token] = seed["raw_xml"]
-
     return {
-        "article": seed["article"],
         "manufacturer": seed["manufacturer"],
         "series": seed["series"],
         "repo": repo,
         "db_path": db_path,
-        "property_columns": property_columns,
-        "seed_token": seed_token,
+        "groups": groups,
     }
 
 
 # ── /generate endpoint ────────────────────────────────────────────────────────
+
+class ArticleInfo(BaseModel):
+    code: str
+    label: str | None = None
+    property_to_class: dict[str, str]
+    prop_val_to_class: dict[str, str]
+    seed_token: str | None = None
+
 
 class ChildResolution(BaseModel):
     parent: str                       # parent property name, e.g. "Shell_Fabric_Type"
@@ -175,13 +211,11 @@ class ChildResolution(BaseModel):
 
 
 class QueueItem(BaseModel):
-    article: str
-    article_class: str
-    property_to_class: dict[str, str]
-    prop_val_to_class: dict[str, str]
+    articles: list[ArticleInfo]
+    selected_article_codes: list[str]
     selected_properties: dict[str, list[str]]   # parent-only dimensions
-    child_resolutions: dict[str, ChildResolution] = {}  # {child_prop: resolution}
-    filename: str = ""  # desired filename for this item inside the zip
+    child_resolutions: dict[str, ChildResolution] = {}
+    filename: str = ""
 
 
 class GenerateRequest(BaseModel):
@@ -189,7 +223,7 @@ class GenerateRequest(BaseModel):
     series: str
     queue: list[QueueItem]
     filename: str = "snapper.obx"
-    seed_token: str | None = None
+    seed_token: str | None = None  # kept for backward compat; ignored (tokens are per-article)
 
 
 def expand_permutations_with_children(
@@ -246,46 +280,60 @@ def generate_obx(req: GenerateRequest):
     if not req.queue:
         raise HTTPException(status_code=400, detail="Queue is empty")
 
-    obx_files: list[tuple[str, str]] = []  # (filename, xml_content)
+    obx_files: list[tuple[str, str]] = []
 
     for item in req.queue:
-        # Build article_class_map: {article_code: article_class}
-        article_class_map = {item.article: item.article_class}
+        # Filter to selected articles only
+        selected_articles = [
+            a for a in item.articles if a.code in item.selected_article_codes
+        ]
+        if not selected_articles:
+            raise HTTPException(status_code=400, detail="No articles selected in queue item")
 
-        # Convert prop_val_to_class from string keys to tuple keys
-        pvtc: dict[tuple, str] = {}
-        for key_str, cls in item.prop_val_to_class.items():
-            eq_idx = key_str.find("=")
-            if eq_idx != -1:
-                prop_name = key_str[:eq_idx]
-                val = key_str[eq_idx + 1:]
-                pvtc[(prop_name, val)] = cls
+        selected_codes = [a.code for a in selected_articles]
+        permutations = compute_permutations(selected_codes, item.selected_properties)
 
-        permutations = compute_permutations([item.article], item.selected_properties)
-        # Convert Pydantic ChildResolution models to plain dicts for the helper
         child_res_dicts = {
             name: {"parent": cr.parent, "resolution": cr.resolution}
             for name, cr in item.child_resolutions.items()
         }
         permutations = expand_permutations_with_children(permutations, child_res_dicts)
-        seed_xml = _seed_store.get(req.seed_token) if req.seed_token else None
-        if seed_xml:
-            xml_content = build_obx_from_seed(
-                seed_xml,
-                permutations,
-                item.property_to_class,
-                pvtc,
+
+        # Build per-article seed XMLs and class maps
+        article_seeds: dict[str, str] = {}
+        article_class_maps: dict[str, dict] = {}
+
+        for art in selected_articles:
+            seed_xml = _seed_store.get(art.seed_token) if art.seed_token else None
+            if seed_xml:
+                article_seeds[art.code] = seed_xml
+            article_class_maps[art.code] = {
+                "property_to_class": art.property_to_class,
+                "prop_val_to_class": art.prop_val_to_class,
+            }
+
+        if article_seeds:
+            xml_content = build_obx_from_multi_seed(
+                article_seeds, permutations, article_class_maps
             )
         else:
+            # No seed templates — build generic OBX
+            first_art = selected_articles[0]
+            pvtc: dict[tuple, str] = {}
+            for key_str, cls in first_art.prop_val_to_class.items():
+                eq = key_str.find("=")
+                if eq != -1:
+                    pvtc[(key_str[:eq], key_str[eq + 1:])] = cls
             xml_content = build_obx(
                 permutations,
-                article_class_map,
+                {a.code: "" for a in selected_articles},
                 req.manufacturer,
                 req.series,
-                item.property_to_class,
+                first_art.property_to_class,
                 pvtc,
             )
-        entry_name = item.filename if item.filename else f"{item.article.replace('/', '_').replace(chr(92), '_')}.obx"
+
+        entry_name = item.filename if item.filename else "snapper.obx"
         obx_files.append((entry_name, xml_content))
 
     if len(obx_files) == 1:
@@ -296,7 +344,6 @@ def generate_obx(req: GenerateRequest):
             headers={"Content-Disposition": f'attachment; filename="{req.filename}"'},
         )
 
-    # Multiple files -> zip
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for fname, content in obx_files:
