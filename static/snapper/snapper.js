@@ -107,7 +107,7 @@ function buildRepoDropdown() {
   const matchedId = repos.find(r => r.path === currentPath)?.id || '__custom__';
 
   repoSelect.innerHTML =
-    repos.map(r => `<option value="${r.id}">${r.name}</option>`).join('') +
+    repos.map(r => `<option value="${r.id}">${escapeHtml(r.name)}</option>`).join('') +
     '<option value="__custom__">— Custom path —</option>';
   repoSelect.value = matchedId;
 }
