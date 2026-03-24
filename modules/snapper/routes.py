@@ -258,6 +258,7 @@ async def parse_seed_endpoint(
         "repo": repo,
         "db_path": db_path,
         "groups": groups,
+        "info_messages": seed.get("info_messages", []),
     }
 
 

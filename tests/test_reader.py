@@ -101,3 +101,16 @@ def test_read_prog_id_skips_comment_lines(tmp_path):
 def test_read_prog_id_fallback_when_oam_missing(tmp_path):
     # No OAM directory at all → returns None, caller uses folder-name fallback
     assert read_prog_id(str(tmp_path / "hmx" / "aeron")) is None
+
+
+def test_read_prog_id_returns_none_when_namespace_mismatches_folder(tmp_path):
+    # civic_tables OAM has sub-range namespace ::hmx::civic_tables_round::W_X
+    # → last namespace segment "civic_tables_round" ≠ folder "civic_tables"
+    # → returns None so caller falls back to "@hmx_civic_tables"
+    oam_dir = tmp_path / "hmx" / "civic_tables" / "ANY" / "1" / "oam"
+    oam_dir.mkdir(parents=True)
+    (oam_dir / "oam_article2ofml.csv").write_text(
+        "MEXXA;::ofml::oi::OiOdbPlElement;::hmx::civic_tables_round::W_CivicTable;\n",
+        encoding="utf-8",
+    )
+    assert read_prog_id(str(tmp_path / "hmx" / "civic_tables")) is None

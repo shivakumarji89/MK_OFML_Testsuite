@@ -55,6 +55,7 @@ def parse_seed(xml_string: str) -> dict:
     series = series_el.get("id")
 
     articles = []
+    info_messages = []
     for article_el in article_elements:
         article_code = None
         varcode_str = None
@@ -68,7 +69,8 @@ def parse_seed(xml_string: str) -> dict:
         if not article_code:
             raise SeedParseError("Missing <artNr type='base'> in bskArticle")
         if not varcode_str:
-            raise SeedParseError("Missing <artNr type='ofmlvarcode'> in bskArticle")
+            info_messages.append(f"Article {article_code} excluded. No OFMLVarcode found.")
+            continue
 
         properties = _parse_varcode(varcode_str)
         label = _extract_short_description(article_el)
@@ -85,6 +87,7 @@ def parse_seed(xml_string: str) -> dict:
         "manufacturer": manufacturer,
         "series": series,
         "articles": articles,
+        "info_messages": info_messages,
         "raw_xml": xml_string,
     }
 

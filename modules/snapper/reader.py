@@ -159,9 +159,18 @@ def read_prog_id(range_dir: str) -> str | None:
     The last '::' segment is the class name and is dropped; the rest form the
     namespace joined with '_'.
 
-    Returns None if the OAM file is missing or cannot be parsed.
+    Validation: the last namespace segment (before the class name) must match
+    the range folder name.  Some ranges (e.g. civic_tables) have sub-range OAM
+    namespaces like "::hmx::civic_tables_round::W_X" whose last segment
+    ("civic_tables_round") does not match the folder ("civic_tables").  In that
+    case we return None so the caller can fall back to "@{mfr}_{range}".
+
+    Returns None if the OAM file is missing, cannot be parsed, or the namespace
+    does not match the range folder.
     """
-    oam_path = Path(range_dir) / "ANY" / "1" / "oam" / "oam_article2ofml.csv"
+    range_path = Path(range_dir)
+    range_folder = range_path.name
+    oam_path = range_path / "ANY" / "1" / "oam" / "oam_article2ofml.csv"
     if not oam_path.exists():
         return None
     try:
@@ -176,7 +185,13 @@ def read_prog_id(range_dir: str) -> str | None:
                 instance_path = parts[2].strip()
                 segments = [s for s in instance_path.split("::") if s]
                 if len(segments) >= 2:
-                    return "@" + "_".join(segments[:-1])
+                    namespace_segments = segments[:-1]  # drop the class name
+                    # The last namespace segment must match the range folder name.
+                    # If it doesn't (e.g. civic_tables → civic_tables_round),
+                    # the OAM belongs to a sub-range; return None to use fallback.
+                    if namespace_segments[-1] != range_folder:
+                        return None
+                    return "@" + "_".join(namespace_segments)
     except OSError:
         pass
     return None
