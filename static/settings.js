@@ -92,14 +92,86 @@ function initSettingsGear(headerEl, options = {}) {
     </div>`;
   document.body.appendChild(modalWrapper);
 
-  // ── Repo list renderer (stub — filled in Task 3) ───────────────────────────
-  function _renderRepoList() {}
+  // ── Repo list renderer ─────────────────────────────────────────────────────
+  function _renderRepoList() {
+    const list = modalWrapper.querySelector('#settingsRepoList');
+    const repos = Settings.getSavedRepos();
+    if (!repos.length) {
+      list.innerHTML = '<p class="text-sm text-gray-400">No saved repositories yet.</p>';
+      return;
+    }
+    list.innerHTML = repos.map(r => `
+      <div class="flex items-center gap-2 text-sm" data-id="${_esc(r.id)}">
+        <span class="repo-name font-medium text-gray-700 w-36 truncate" title="${_esc(r.name)}">${_esc(r.name)}</span>
+        <span class="text-gray-400 flex-1 truncate text-xs" title="${_esc(r.path)}">${_esc(r.path)}</span>
+        <button class="rename-btn text-xs text-blue-500 hover:underline flex-shrink-0">Rename</button>
+        <button class="delete-btn text-xs text-red-400 hover:underline flex-shrink-0">Delete</button>
+      </div>`).join('');
+
+    // wire rename buttons
+    list.querySelectorAll('.rename-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const row = btn.closest('[data-id]');
+        const id = row.dataset.id;
+        const nameSpan = row.querySelector('.repo-name');
+        const currentName = nameSpan.textContent;
+        nameSpan.outerHTML = `
+          <input class="rename-input border rounded px-1 py-0.5 text-sm w-36" value="${_esc(currentName)}">`;
+        btn.textContent = 'Save';
+        btn.classList.replace('text-blue-500', 'text-green-600');
+        btn.onclick = () => {
+          const input = row.querySelector('.rename-input');
+          const newName = input.value.trim();
+          if (!newName) return;
+          Settings.renameRepo(id, newName);
+          _emitChanged();
+          _renderRepoList();
+        };
+        row.querySelector('.rename-input').addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') _renderRepoList();
+        });
+      });
+    });
+
+    // wire delete buttons
+    list.querySelectorAll('.delete-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.closest('[data-id]').dataset.id;
+        Settings.deleteRepo(id);
+        _emitChanged();
+        _renderRepoList();
+      });
+    });
+  }
+
+  // ── Add form ───────────────────────────────────────────────────────────────
+  const nameInput = modalWrapper.querySelector('#settingsNewRepoName');
+  const pathInput = modalWrapper.querySelector('#settingsNewRepoPath');
+  const addBtn    = modalWrapper.querySelector('#settingsAddRepoBtn');
+
+  function _updateAddBtn() {
+    addBtn.disabled = !nameInput.value.trim() || !pathInput.value.trim();
+  }
+  nameInput.addEventListener('input', _updateAddBtn);
+  pathInput.addEventListener('input', _updateAddBtn);
+
+  addBtn.addEventListener('click', () => {
+    const name = nameInput.value.trim();
+    const path = pathInput.value.trim();
+    if (!name || !path) return;
+    Settings.addRepo(name, path);
+    _emitChanged();
+    nameInput.value = '';
+    pathInput.value = '';
+    addBtn.disabled = true;
+    _renderRepoList();
+  });
 
   // ── Open / close ───────────────────────────────────────────────────────────
   function openModal() {
     if (options.getCurrentPath) {
       const cur = options.getCurrentPath();
-      if (cur) document.getElementById('settingsNewRepoPath').value = cur;
+      if (cur) modalWrapper.querySelector('#settingsNewRepoPath').value = cur;
     }
     _renderRepoList();
     modalWrapper.classList.remove('hidden');
@@ -109,12 +181,12 @@ function initSettingsGear(headerEl, options = {}) {
     modalWrapper.classList.add('hidden');
     modalWrapper.classList.remove('flex');
     // reset add form
-    document.getElementById('settingsNewRepoName').value = '';
-    document.getElementById('settingsNewRepoPath').value = '';
-    document.getElementById('settingsAddRepoBtn').disabled = true;
+    modalWrapper.querySelector('#settingsNewRepoName').value = '';
+    modalWrapper.querySelector('#settingsNewRepoPath').value = '';
+    modalWrapper.querySelector('#settingsAddRepoBtn').disabled = true;
   }
 
   gearBtn.addEventListener('click', openModal);
-  document.getElementById('settingsModalClose').addEventListener('click', closeModal);
+  modalWrapper.querySelector('#settingsModalClose').addEventListener('click', closeModal);
   modalWrapper.addEventListener('click', (e) => { if (e.target === modalWrapper) closeModal(); });
 }
