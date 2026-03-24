@@ -146,3 +146,37 @@ def load_range_data(db_path: str) -> dict:
         "values": values,
         "relations": relations,
     }
+
+
+def read_prog_id(range_dir: str) -> str | None:
+    """
+    Derive the pCon progId for a range from oam_article2ofml.csv.
+
+    Reads the OFML instance path from column[2] of the first data row, e.g.:
+      "::hmx::aeron::W_AERON"  →  "@hmx_aeron"
+      "::hmx::ratio_rebuild::W_X"  →  "@hmx_ratio_rebuild"
+
+    The last '::' segment is the class name and is dropped; the rest form the
+    namespace joined with '_'.
+
+    Returns None if the OAM file is missing or cannot be parsed.
+    """
+    oam_path = Path(range_dir) / "ANY" / "1" / "oam" / "oam_article2ofml.csv"
+    if not oam_path.exists():
+        return None
+    try:
+        with oam_path.open(encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split(";")
+                if len(parts) < 3:
+                    continue
+                instance_path = parts[2].strip()
+                segments = [s for s in instance_path.split("::") if s]
+                if len(segments) >= 2:
+                    return "@" + "_".join(segments[:-1])
+    except OSError:
+        pass
+    return None
