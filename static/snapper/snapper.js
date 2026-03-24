@@ -29,7 +29,7 @@ function assembleZipFilename(series, article) {
 
 // ── State ──────────────────────────────────────────────────────────────────────
 let currentSeed = null;
-let hierarchyModes = {};
+let currentPermCount = 0;
 let queue = [];
 
 // ── Queue persistence ──────────────────────────────────────────────────────────
@@ -139,10 +139,6 @@ parseSeedBtn.addEventListener('click', async () => {
   }
 
   currentSeed = await response.json();
-  hierarchyModes = {};
-  for (const col of currentSeed.property_columns) {
-    if (col.is_child) hierarchyModes[col.name] = 'first';
-  }
 
   seedStatus.textContent = '';
   parseSeedBtn.disabled = false;
@@ -175,7 +171,10 @@ function renderDimensions() {
     wrapper.className = 'flex flex-col gap-1';
     wrapper.appendChild(_buildCheckboxColumn(col.name, col.values, col.seed_value));
     const childName = parentHasChild.get(col.name);
-    if (childName) wrapper.appendChild(_buildHierarchyModeControl(childName));
+    if (childName) {
+      const childCol = currentSeed.property_columns.find(c => c.name === childName);
+      if (childCol) wrapper.appendChild(_buildChildColumn(childCol));
+    }
     dimensionColumns.appendChild(wrapper);
   }
   updatePermCount();
@@ -203,40 +202,106 @@ function _buildCheckboxColumn(propName, values, seedValue) {
     </div>`;
   col.querySelector('.select-all-btn').addEventListener('click', () => {
     col.querySelectorAll('.dim-check').forEach(cb => { cb.checked = true; });
-    updatePermCount();
+    onDimensionChange();
   });
   col.querySelector('.select-none-btn').addEventListener('click', () => {
     col.querySelectorAll('.dim-check').forEach(cb => { cb.checked = false; });
-    updatePermCount();
+    onDimensionChange();
   });
-  col.querySelectorAll('.dim-check').forEach(cb => cb.addEventListener('change', updatePermCount));
+  col.querySelectorAll('.dim-check').forEach(cb => cb.addEventListener('change', onDimensionChange));
   return col;
 }
 
-function _buildHierarchyModeControl(childPropName) {
-  const el = document.createElement('div');
-  el.className = 'bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-800';
-  const mode = hierarchyModes[childPropName] || 'first';
-  el.innerHTML = `
-    <div class="font-semibold mb-1">${escapeHtml(childPropName)}</div>
-    <div class="text-gray-500 mb-1">Colour assignment:</div>
-    <div class="flex gap-1">
-      <button class="mode-btn px-2 py-0.5 rounded text-xs border ${mode === 'first' ? 'bg-amber-600 text-white border-amber-600' : 'bg-white border-gray-300 text-gray-700'}"
-        data-mode="first">First only</button>
-      <button class="mode-btn px-2 py-0.5 rounded text-xs border ${mode === 'distribute' ? 'bg-amber-600 text-white border-amber-600' : 'bg-white border-gray-300 text-gray-700'}"
-        data-mode="distribute">Distribute</button>
-    </div>`;
-  el.querySelectorAll('.mode-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      hierarchyModes[childPropName] = btn.dataset.mode;
-      el.querySelectorAll('.mode-btn').forEach(b => {
-        const active = b.dataset.mode === btn.dataset.mode;
-        b.className = `mode-btn px-2 py-0.5 rounded text-xs border ${active ? 'bg-amber-600 text-white border-amber-600' : 'bg-white border-gray-300 text-gray-700'}`;
+function onDimensionChange() {
+  _updateChildSections();
+  updatePermCount();
+}
+
+function _updateChildSections() {
+  if (!currentSeed) return;
+  const sel = getParentSelections();
+
+  for (const childCol of currentSeed.property_columns.filter(c => c.is_child)) {
+    const checkedParentVals = new Set(sel[childCol.parent] || []);
+    const colEl = dimensionColumns.querySelector(`[data-prop-name="${CSS.escape(childCol.name)}"]`);
+    if (!colEl) continue;
+
+    colEl.querySelectorAll('.child-section').forEach(section => {
+      const pv = section.dataset.parentVal;
+      const active = checkedParentVals.has(pv);
+      section.querySelectorAll('.child-check').forEach(cb => {
+        cb.disabled = !active;
+        if (!active) cb.checked = false;
       });
+      section.querySelectorAll('.child-label').forEach(lbl => {
+        lbl.classList.toggle('text-gray-400', !active);
+        lbl.classList.toggle('cursor-not-allowed', !active);
+        lbl.classList.toggle('text-gray-700', active);
+        lbl.classList.toggle('cursor-pointer', active);
+      });
+      // Dim the section header when inactive
+      const header = section.querySelector('.section-header');
+      if (header) {
+        header.classList.toggle('text-gray-300', !active);
+        header.classList.toggle('text-gray-500', active);
+      }
     });
+  }
+}
+
+function _buildChildColumn(col) {
+  // col = { name, values, is_child, parent, mapping }
+  // Build a code→label lookup from the flat values list
+  const labelOf = {};
+  for (const v of col.values) labelOf[v.code] = v.label;
+
+  const el = document.createElement('div');
+  el.className = 'bg-white rounded-lg shadow p-3 min-w-44 max-w-56 flex flex-col';
+  el.dataset.propName = col.name;
+
+  // Build grouped sections HTML
+  const sectionsHtml = Object.entries(col.mapping || {}).map(([parentVal, childCodes]) => {
+    const childRows = childCodes.map(code => {
+      const label = labelOf[code] || code;
+      const hasLabel = label && label !== code;
+      return `
+        <label class="child-label flex items-center gap-1 text-xs text-gray-400 cursor-not-allowed">
+          <input type="checkbox" class="child-check" data-prop="${escapeHtml(col.name)}"
+            data-value="${escapeHtml(code)}" data-parent-val="${escapeHtml(parentVal)}" disabled>
+          <span class="font-mono">${escapeHtml(code)}</span>
+          ${hasLabel ? `<span class="text-gray-300">·</span><span class="truncate">${escapeHtml(label)}</span>` : ''}
+        </label>`;
+    }).join('');
+    return `
+      <div class="child-section mb-1" data-parent-val="${escapeHtml(parentVal)}">
+        <div class="section-header text-xs font-mono text-gray-300 px-1 pb-0.5 border-b border-gray-100 mb-0.5">${escapeHtml(parentVal)}</div>
+        <div class="pl-1 space-y-0.5">${childRows}</div>
+      </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="font-semibold text-sm text-gray-700 mb-0.5 border-b pb-1" title="${escapeHtml(col.name)}">${escapeHtml(col.name)}</div>
+    <div class="text-xs text-gray-400 mb-2">↳ ${escapeHtml(col.parent)}</div>
+    <div class="flex gap-1 mb-2">
+      <button class="text-xs text-blue-600 hover:underline select-all-btn">All</button>
+      <span class="text-gray-300">|</span>
+      <button class="text-xs text-blue-600 hover:underline select-none-btn">None</button>
+    </div>
+    <div class="overflow-y-auto max-h-64">${sectionsHtml}</div>`;
+
+  el.querySelector('.select-all-btn').addEventListener('click', () => {
+    el.querySelectorAll('.child-check:not(:disabled)').forEach(cb => { cb.checked = true; });
+    onDimensionChange();
   });
+  el.querySelector('.select-none-btn').addEventListener('click', () => {
+    el.querySelectorAll('.child-check:not(:disabled)').forEach(cb => { cb.checked = false; });
+    onDimensionChange();
+  });
+  el.querySelectorAll('.child-check').forEach(cb => cb.addEventListener('change', onDimensionChange));
+
   return el;
 }
+
 
 // ── Permutation counter ────────────────────────────────────────────────────────
 function getParentSelections() {
@@ -248,14 +313,57 @@ function getParentSelections() {
   return sel;
 }
 
-function computePermCount(sel) {
-  const counts = Object.values(sel).map(v => v.length);
-  return counts.length ? counts.reduce((a, b) => a * b, 1) : 0;
+function getChildSelections() {
+  if (!currentSeed) return {};
+  const result = {};
+  for (const col of currentSeed.property_columns) {
+    if (!col.is_child) continue;
+    const resolution = {};
+    for (const parentVal of Object.keys(col.mapping || {})) {
+      const selected = [];
+      dimensionColumns.querySelectorAll(
+        `.child-check[data-prop="${CSS.escape(col.name)}"][data-parent-val="${CSS.escape(parentVal)}"]:checked`
+      ).forEach(cb => selected.push(cb.dataset.value));
+      resolution[parentVal] = selected;
+    }
+    result[col.name] = { parent: col.parent, resolution };
+  }
+  return result;
 }
 
 function updatePermCount() {
+  if (!currentSeed) { permCount.textContent = ''; return; }
+
   const sel = getParentSelections();
-  const count = computePermCount(sel);
+  const childSel = getChildSelections();
+
+  // Which props are parents of a child?
+  const parentProps = new Set(
+    currentSeed.property_columns.filter(c => c.is_child).map(c => c.parent)
+  );
+
+  // Standalone dimensions: not a child and not a parent of a child
+  const factors = [];
+  for (const col of currentSeed.property_columns) {
+    if (col.is_child || parentProps.has(col.name)) continue;
+    const n = (sel[col.name] || []).length;
+    if (n > 0) factors.push(n);
+  }
+
+  // Parent-child pair expansion: Σ max(1, child_count) per selected parent value
+  for (const childCol of currentSeed.property_columns.filter(c => c.is_child)) {
+    const parentVals = sel[childCol.parent] || [];
+    if (parentVals.length === 0) continue;
+    const resolution = childSel[childCol.name]?.resolution || {};
+    let expansion = 0;
+    for (const pv of parentVals) {
+      expansion += Math.max(1, (resolution[pv] || []).length);
+    }
+    factors.push(expansion);
+  }
+
+  const count = factors.length ? factors.reduce((a, b) => a * b, 1) : 0;
+  currentPermCount = count;  // stored for use by addToQueueBtn handler
   permCount.textContent = `${count.toLocaleString()} permutations`;
   permCount.className = 'text-sm font-medium ' + (
     count > ERROR_LIMIT ? 'text-red-600' :
@@ -273,26 +381,7 @@ function updateFilenamePreview() {
 }
 articleLabel.addEventListener('input', updateFilenamePreview);
 
-// ── Child resolution + class maps ──────────────────────────────────────────────
-function resolveChildValues(parentSelections) {
-  if (!currentSeed) return {};
-  const out = {};
-  for (const childCol of currentSeed.property_columns.filter(c => c.is_child)) {
-    const parentVals = parentSelections[childCol.parent] || [];
-    const mode = hierarchyModes[childCol.name] || 'first';
-    const resolution = {};
-    for (const pv of parentVals) {
-      const children = (childCol.mapping || {})[pv] || [];
-      if (children.length === 0) continue;
-      resolution[pv] = mode === 'first' ? children[0] : children[parentVals.indexOf(pv) % children.length];
-    }
-    if (Object.keys(resolution).length > 0) {
-      out[childCol.name] = { parent: childCol.parent, resolution };
-    }
-  }
-  return out;
-}
-
+// ── Class maps ─────────────────────────────────────────────────────────────────
 function buildClassMaps() {
   if (!currentSeed) return { propertyToClass: {}, propValToClass: {} };
   const propertyToClass = {}, propValToClass = {};
@@ -322,8 +411,8 @@ addToQueueBtn.addEventListener('click', () => {
     propertyToClass,
     propValToClass,
     selectedProperties: parentSelections,
-    childResolutions: resolveChildValues(parentSelections),
-    count: computePermCount(parentSelections),
+    childResolutions: getChildSelections(),
+    count: currentPermCount,
     seedToken: currentSeed.seed_token ?? null,
     keptCount: null,
     removedCount: null,
