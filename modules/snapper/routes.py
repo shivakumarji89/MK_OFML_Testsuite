@@ -9,8 +9,8 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from .reader import discover_ranges, load_range_data, _read_csv
-from .generator import compute_permutations, build_obx, build_obx_from_seed, build_obx_from_multi_seed, SENTINEL
+from .reader import discover_ranges, load_range_data, _read_csv, read_prog_id
+from .generator import compute_permutations, build_obx, build_obx_from_seed, build_obx_from_multi_seed, build_raw_seed_obx, SENTINEL
 from .seed_parser import parse_seed, SeedParseError
 from .hierarchy import detect_hierarchy, detect_hierarchy_from_tables
 
@@ -61,6 +61,72 @@ def _build_short_id_relations(db_path: str) -> dict[str, str]:
                 short_to_expr[short_id] = expr
 
     return short_to_expr
+
+
+# ── /ranges endpoint ──────────────────────────────────────────────────────────
+
+@router.get("/ranges")
+def get_ranges(repo: str):
+    """Return the list of valid ranges found in the given repo path."""
+    ranges = discover_ranges(repo)
+    # Strip db_path — it's an internal server-side detail
+    return {
+        "ranges": [{"manufacturer": r["manufacturer"], "range": r["range"]} for r in ranges]
+    }
+
+
+# ── /generate-raw-seed endpoint ───────────────────────────────────────────────
+
+class RawSeedRequest(BaseModel):
+    repo: str
+    manufacturer: str
+    range: str
+
+
+@router.post("/generate-raw-seed")
+def generate_raw_seed(req: RawSeedRequest):
+    """
+    Generate a raw seed OBX for the given range.
+    The OBX contains one bskArticle per configurable article with blank
+    configuration — pCon populates defaults when the user runs Update.
+    """
+    ranges = discover_ranges(req.repo)
+    matched = next(
+        (r for r in ranges
+         if r["manufacturer"] == req.manufacturer and r["range"] == req.range),
+        None,
+    )
+    if matched is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Range '{req.range}' not found for manufacturer '{req.manufacturer}' in '{req.repo}'",
+        )
+
+    try:
+        range_data = load_range_data(matched["db_path"])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load range data: {e}")
+
+    articles = range_data["articles"]
+    if not articles:
+        raise HTTPException(status_code=400, detail="No configurable articles found in this range")
+
+    # db_path is "{range_dir}/ANY/1/db" — go up 3 levels to get range_dir
+    range_dir = str(Path(matched["db_path"]).parent.parent.parent)
+    prog_id = read_prog_id(range_dir) or f"@{req.manufacturer}_{req.range}"
+
+    xml_content = build_raw_seed_obx(
+        articles=articles,
+        prog_id=prog_id,
+        mfr_folder=req.manufacturer,
+    )
+
+    filename = f"raw_seed_{req.range}.obx"
+    return Response(
+        content=xml_content,
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ── /parse-seed endpoint ──────────────────────────────────────────────────────

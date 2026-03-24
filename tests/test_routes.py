@@ -290,3 +290,80 @@ def test_clean_obx_all_valid():
     resp = _clean(obx)
     assert resp.headers["X-Kept-Count"] == "2"
     assert resp.headers["X-Removed-Count"] == "0"
+
+
+# ── Raw seed routes ─────────────────────────────────────────────────────────────
+
+def _make_mock_repo(tmp_path, mfr="hmx", range_name="aeron", series_code="AERON", mfr_code="HM"):
+    """Create a minimal mock repo with one configurable article."""
+    db_dir = tmp_path / mfr / range_name / "ANY" / "1" / "db"
+    db_dir.mkdir(parents=True)
+    (db_dir / "ocd_article.csv").write_text(
+        f"AER1A13;C;{mfr_code};{series_code}\nAER1B23;C;{mfr_code};{series_code}\n",
+        encoding="utf-8",
+    )
+    (db_dir / "ocd_artbase.csv").write_text(
+        f"AER1A13;{series_code}_NORMAL\nAER1B23;{series_code}_NORMAL\n",
+        encoding="utf-8",
+    )
+    (db_dir / "ocd_property.csv").write_text("", encoding="utf-8")
+    (db_dir / "ocd_propertyvalue.csv").write_text("", encoding="utf-8")
+    return tmp_path
+
+
+def test_get_ranges_returns_list(tmp_path):
+    _make_mock_repo(tmp_path)
+    response = client.get(f"/api/snapper/ranges?repo={tmp_path}")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["ranges"]) == 1
+    assert data["ranges"][0]["manufacturer"] == "hmx"
+    assert data["ranges"][0]["range"] == "aeron"
+    assert "db_path" not in data["ranges"][0]  # db_path is internal, not exposed
+
+
+def test_get_ranges_empty_for_missing_repo(tmp_path):
+    response = client.get(f"/api/snapper/ranges?repo={tmp_path / 'nonexistent'}")
+    assert response.status_code == 200
+    assert response.json()["ranges"] == []
+
+
+def test_generate_raw_seed_returns_obx(tmp_path):
+    _make_mock_repo(tmp_path)
+    response = client.post("/api/snapper/generate-raw-seed", json={
+        "repo": str(tmp_path),
+        "manufacturer": "hmx",
+        "range": "aeron",
+    })
+    assert response.status_code == 200
+    assert "xml" in response.headers["content-type"]
+    root = ET.fromstring(response.content)
+    articles = root.findall(".//bskArticle")
+    assert len(articles) == 2
+    # Each article has a base artNr
+    for art in articles:
+        base = next(e for e in art.findall("artNr") if e.get("type") == "base")
+        assert base.text in ("AER1A13", "AER1B23")
+
+
+def test_generate_raw_seed_content_disposition(tmp_path):
+    _make_mock_repo(tmp_path)
+    response = client.post("/api/snapper/generate-raw-seed", json={
+        "repo": str(tmp_path),
+        "manufacturer": "hmx",
+        "range": "aeron",
+    })
+    assert response.status_code == 200
+    disposition = response.headers.get("content-disposition", "")
+    assert "raw_seed_aeron.obx" in disposition
+
+
+def test_generate_raw_seed_404_for_unknown_range(tmp_path):
+    _make_mock_repo(tmp_path)
+    response = client.post("/api/snapper/generate-raw-seed", json={
+        "repo": str(tmp_path),
+        "manufacturer": "hmx",
+        "range": "nonexistent",
+    })
+    assert response.status_code == 404
+
