@@ -76,6 +76,7 @@ def detect_hierarchy(
         # acceptable for the QA use case.
         parent_refs: set[str] = set()
         parent_value_map: dict[str, list[str]] = {}
+        seen_children: dict[str, set[str]] = {}  # parent_val -> seen child codes
 
         for v in all_vals:
             rel_id = v.get("relation_id", "")
@@ -89,7 +90,10 @@ def detect_hierarchy(
                 continue  # e.g. $-conditions, multi-value IN, etc.
             parent_name, parent_val = parsed
             parent_refs.add(parent_name)
-            parent_value_map.setdefault(parent_val, []).append(v["value"])
+            child_code = v["value"]
+            if child_code not in seen_children.setdefault(parent_val, set()):
+                seen_children[parent_val].add(child_code)
+                parent_value_map.setdefault(parent_val, []).append(child_code)
 
         # Need at least some matched values, all referencing the same parent
         if not parent_refs or len(parent_refs) != 1:
