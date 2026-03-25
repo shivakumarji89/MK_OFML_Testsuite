@@ -2,11 +2,33 @@ import os
 from pathlib import Path
 
 
+def _read_series_codes(db_path: Path) -> set[str]:
+    """
+    Extract the distinct series codes (col[3]) from ocd_article.csv.
+    These are the authoritative series IDs pCon writes into OBX <series id='...'>.
+    """
+    codes: set[str] = set()
+    article_csv = db_path / "ocd_article.csv"
+    try:
+        with article_csv.open(encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split(";")
+                if len(parts) > 3 and parts[3].strip():
+                    codes.add(parts[3].strip())
+    except OSError:
+        pass
+    return codes
+
+
 def discover_ranges(repo_root: str) -> list[dict]:
     """
     Scan repo_root for valid OFML ranges.
     A range is valid if {manufacturer}/{range}/ANY/1/db/ocd_article.csv exists.
-    Returns list of {manufacturer, range, db_path}.
+    Returns list of {manufacturer, range, db_path, series_codes}.
+    series_codes is the set of pCon series IDs found in ocd_article.csv col[3].
     """
     results = []
     repo = Path(repo_root)
@@ -24,6 +46,7 @@ def discover_ranges(repo_root: str) -> list[dict]:
                     "manufacturer": mfr_dir.name,
                     "range": range_dir.name,
                     "db_path": str(db_path),
+                    "series_codes": _read_series_codes(db_path),
                 })
     return results
 
@@ -58,15 +81,21 @@ def load_range_data(db_path: str) -> dict:
     # col[1] == 'C' means configurable
     configurable = {row[0]: row for row in article_rows if len(row) > 3 and row[1].strip() == "C"}
 
-    # --- ocd_artbase.csv: map article code → article class ---
+    # --- ocd_artbase.csv: map article code → article class + per-article restrictions ---
     artbase_rows = _read_csv(str(db / "ocd_artbase.csv"))
     code_to_class = {}
+    artbase_restrictions: dict[str, dict[str, list[str]]] = {}
     for row in artbase_rows:
         if len(row) < 2:
             continue
         code = row[0].strip()
         if code not in code_to_class:
             code_to_class[code] = row[1].strip()
+        if len(row) >= 4:
+            prop_name = row[2].strip()
+            val_code = row[3].strip()
+            if prop_name and val_code:
+                artbase_restrictions.setdefault(code, {}).setdefault(prop_name, []).append(val_code)
 
     articles = []
     for code, row in configurable.items():
@@ -145,6 +174,7 @@ def load_range_data(db_path: str) -> dict:
         "properties": properties,
         "values": values,
         "relations": relations,
+        "artbase_restrictions": artbase_restrictions,
     }
 
 
