@@ -309,10 +309,17 @@ function renderDimensions() {
     wrapper.appendChild(
       _buildCheckboxColumn(col.name, col.values, col.seed_value, state.dimSelections, group.articles)
     );
-    const childName = parentHasChild.get(col.name);
-    if (childName) {
-      const childCol = group.property_columns.find(c => c.name === childName);
-      if (childCol) wrapper.appendChild(_buildChildColumn(childCol, group.articles));
+    // Follow the child chain to any depth (e.g. Group → Fabric → Finish → …).
+    // parentHasChild maps each parent to its immediate child; the while-loop
+    // traverses the full linear chain without needing to change the map itself.
+    let current = col.name;
+    while (true) {
+      const nextName = parentHasChild.get(current);
+      if (!nextName) break;
+      const nextCol = group.property_columns.find(c => c.name === nextName);
+      if (!nextCol) break;
+      wrapper.appendChild(_buildChildColumn(nextCol, group.articles));
+      current = nextName;
     }
     dimensionColumns.appendChild(wrapper);
   }
@@ -435,6 +442,11 @@ function _updateChildSections() {
         header.classList.toggle('text-gray-500', active);
       }
     });
+
+    // Record checked values of this column so any deeper child can read them.
+    const nowChecked = [];
+    colEl.querySelectorAll('.child-check:checked').forEach(cb => nowChecked.push(cb.dataset.value));
+    sel[childCol.name] = nowChecked;
   }
 }
 
