@@ -169,8 +169,11 @@ async def parse_seed_endpoint(
     short_id_relations = _build_short_id_relations(db_path)
 
     # Build values lookup: property_name -> list of {code, label}
+    # Also build per-class lookup: (article_class, property_name) -> [value_codes]
     values_by_prop: dict[str, list[dict]] = {}
     seen: dict[str, set] = {}
+    class_prop_values: dict[tuple[str, str], list[str]] = {}
+    seen_cpv: dict[tuple[str, str], set[str]] = {}
     for v in range_data["values"]:
         pname = v["property_name"]
         code = v["value"]
@@ -182,6 +185,13 @@ async def parse_seed_endpoint(
         if code not in seen[pname]:
             seen[pname].add(code)
             values_by_prop[pname].append({"code": code, "label": v.get("label", code)})
+        key = (v["article_class"], pname)
+        if key not in class_prop_values:
+            class_prop_values[key] = []
+            seen_cpv[key] = set()
+        if code not in seen_cpv[key]:
+            seen_cpv[key].add(code)
+            class_prop_values[key].append(code)
 
     # Group articles by their property-name signature
     groups_map: dict[frozenset, list[dict]] = {}
@@ -228,13 +238,22 @@ async def parse_seed_endpoint(
                 for v in values_by_prop.get(p["name"], []):
                     prop_val_to_class[f"{p['name']}={v['code']}"] = p["article_class"]
 
-            # Build valid_values: only include properties that have artbase restrictions
+            # Build valid_values: class-filtered values, optionally narrowed by artbase restrictions.
+            # If a property has values from multiple article classes in the OCD, only the values
+            # belonging to this article's class are valid. Artbase restrictions narrow further.
             art_restrictions = artbase_restrictions.get(article["article"], {})
             valid_values: dict[str, list[str]] = {}
             for p in article["properties"]:
+                class_vals = class_prop_values.get((p["article_class"], p["name"]), [])
+                if not class_vals:
+                    # No class data — leave out so frontend treats all values as valid
+                    continue
                 restriction = art_restrictions.get(p["name"])
                 if restriction is not None:
-                    valid_values[p["name"]] = restriction
+                    restriction_set = set(restriction)
+                    valid_values[p["name"]] = [c for c in class_vals if c in restriction_set]
+                else:
+                    valid_values[p["name"]] = class_vals
 
             # Wrap the single article element in a minimal cutBuffer for use as a seed template
             article_seed_xml = (

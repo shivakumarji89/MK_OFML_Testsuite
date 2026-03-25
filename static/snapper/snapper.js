@@ -345,7 +345,7 @@ function _computeTiers(propName, valueCodes, selectedArticles) {
   return tiers;
 }
 
-const _TIER_COLORS = { confirmed: 'text-green-600', partial: 'text-amber-500', invalid: 'text-red-400' };
+const _TIER_COLORS = { confirmed: 'text-green-600', partial: 'text-amber-500', invalid: 'text-red-600' };
 
 function _tierDotHtml(tier) {
   return `<span class="tier-dot ${_TIER_COLORS[tier] ?? ''}" data-tier="${tier}">●</span>`;
