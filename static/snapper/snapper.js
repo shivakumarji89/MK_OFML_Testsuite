@@ -401,6 +401,7 @@ function _buildCheckboxColumn(propName, values, seedValue, savedDimSelections, a
 
 function onDimensionChange() {
   _updateChildSections();
+  _updateAllTierIndicators();
   updatePermCount();
 }
 
@@ -433,6 +434,32 @@ function _updateChildSections() {
         header.classList.toggle('text-gray-300', !active);
         header.classList.toggle('text-gray-500', active);
       }
+    });
+  }
+}
+
+function _updateAllTierIndicators() {
+  if (!currentSeed) return;
+  const group = currentSeed.groups[currentGroupIndex];
+  if (!group) return;
+
+  const selectedCodes = new Set(_getArticleSelections() || group.articles.map(a => a.code));
+  const selectedArts = group.articles.filter(a => selectedCodes.has(a.code));
+
+  for (const col of group.property_columns) {
+    // data-prop-name is set by _buildCheckboxColumn / _buildChildColumn via col.dataset.propName
+    const colEl = dimensionColumns.querySelector(`[data-prop-name="${CSS.escape(col.name)}"]`);
+    if (!colEl) continue;
+
+    const valueCodes = col.values.map(v => v.code);
+    const tiers = _computeTiers(col.name, valueCodes, selectedArts);
+
+    colEl.querySelectorAll('.tier-dot').forEach(dot => {
+      const cb = dot.closest('label')?.querySelector('input[data-value]');
+      if (!cb) return;
+      const tier = tiers.get(cb.dataset.value) ?? 'confirmed';
+      dot.className = `tier-dot ${_TIER_COLORS[tier]}`;
+      dot.dataset.tier = tier;
     });
   }
 }
