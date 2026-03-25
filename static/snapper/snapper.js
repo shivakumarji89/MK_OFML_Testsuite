@@ -307,25 +307,63 @@ function renderDimensions() {
     const wrapper = document.createElement('div');
     wrapper.className = 'flex flex-col gap-1';
     wrapper.appendChild(
-      _buildCheckboxColumn(col.name, col.values, col.seed_value, state.dimSelections)
+      _buildCheckboxColumn(col.name, col.values, col.seed_value, state.dimSelections, group.articles)
     );
     const childName = parentHasChild.get(col.name);
     if (childName) {
       const childCol = group.property_columns.find(c => c.name === childName);
-      if (childCol) wrapper.appendChild(_buildChildColumn(childCol));
+      if (childCol) wrapper.appendChild(_buildChildColumn(childCol, group.articles));
     }
     dimensionColumns.appendChild(wrapper);
   }
   updatePermCount();
 }
 
-function _buildCheckboxColumn(propName, values, seedValue, savedDimSelections) {
+/**
+ * Compute validity tiers for a property's values based on selected articles.
+ * @param {string} propName
+ * @param {string[]} valueCodes
+ * @param {object[]} selectedArticles - articles with a `valid_values` map
+ * @returns {Map<string, 'confirmed'|'partial'|'invalid'>}
+ */
+function _computeTiers(propName, valueCodes, selectedArticles) {
+  const tiers = new Map();
+  const n = selectedArticles.length;
+  if (n === 0) {
+    for (const code of valueCodes) tiers.set(code, 'confirmed');
+    return tiers;
+  }
+  for (const code of valueCodes) {
+    let validCount = 0;
+    for (const art of selectedArticles) {
+      const restriction = art.valid_values?.[propName];
+      // No restriction entry → all values valid for this article
+      if (restriction == null || restriction.includes(code)) validCount++;
+    }
+    tiers.set(code, validCount === n ? 'confirmed' : validCount > 0 ? 'partial' : 'invalid');
+  }
+  return tiers;
+}
+
+const _TIER_COLORS = { confirmed: 'text-green-600', partial: 'text-amber-500', invalid: 'text-red-400' };
+
+function _tierDotHtml(tier) {
+  return `<span class="tier-dot ${_TIER_COLORS[tier] ?? ''}" data-tier="${tier}">●</span>`;
+}
+
+function _buildCheckboxColumn(propName, values, seedValue, savedDimSelections, articles = []) {
   const col = document.createElement('div');
   col.className = 'bg-white rounded-lg shadow p-3 min-w-44 max-w-56 flex flex-col';
   col.dataset.propName = propName;
 
   // Use saved selections if present; otherwise pre-check seed value
   const savedVals = savedDimSelections && savedDimSelections[propName];
+
+  // _getArticleSelections() returns null (not []) when no article checkboxes exist,
+  // so the || fallback to all articles is safe.
+  const selectedCodes = new Set(_getArticleSelections() || articles.map(a => a.code));
+  const selectedArts = articles.filter(a => selectedCodes.has(a.code));
+  const tiers = _computeTiers(propName, values.map(v => v.code), selectedArts);
 
   col.innerHTML = `
     <div class="font-semibold text-sm text-gray-700 mb-2 border-b pb-1" title="${escapeHtml(propName)}">${escapeHtml(propName)}</div>
@@ -343,6 +381,7 @@ function _buildCheckboxColumn(propName, values, seedValue, savedDimSelections) {
           <label class="flex items-center gap-1 text-xs text-gray-700 cursor-pointer">
             <input type="checkbox" class="dim-check" data-prop="${escapeHtml(propName)}" data-value="${escapeHtml(v.code)}"
               ${isChecked ? 'checked' : ''}>
+            ${_tierDotHtml(tiers.get(v.code) ?? 'confirmed')}
             <span class="font-mono text-gray-500">${escapeHtml(v.code)}</span>
             ${v.label && v.label !== v.code ? `<span class="text-gray-300">·</span><span class="truncate">${escapeHtml(v.label)}</span>` : ''}
           </label>`;
@@ -398,7 +437,7 @@ function _updateChildSections() {
   }
 }
 
-function _buildChildColumn(col) {
+function _buildChildColumn(col, articles = []) {
   // col = { name, values, is_child, parent, mapping }
   // Build a code→label lookup from the flat values list
   const labelOf = {};
@@ -407,6 +446,12 @@ function _buildChildColumn(col) {
   const el = document.createElement('div');
   el.className = 'bg-white rounded-lg shadow p-3 min-w-44 max-w-56 flex flex-col';
   el.dataset.propName = col.name;
+
+  // Same null-safe pattern as _buildCheckboxColumn — _getArticleSelections returns null not []
+  const selectedCodes = new Set(_getArticleSelections() || articles.map(a => a.code));
+  const selectedArts = articles.filter(a => selectedCodes.has(a.code));
+  const allChildCodes = (col.values || []).map(v => v.code);
+  const tiers = _computeTiers(col.name, allChildCodes, selectedArts);
 
   // Build grouped sections HTML
   const sectionsHtml = Object.entries(col.mapping || {}).map(([parentVal, childCodes]) => {
@@ -417,6 +462,7 @@ function _buildChildColumn(col) {
         <label class="child-label flex items-center gap-1 text-xs text-gray-400 cursor-not-allowed">
           <input type="checkbox" class="child-check" data-prop="${escapeHtml(col.name)}"
             data-value="${escapeHtml(code)}" data-parent-val="${escapeHtml(parentVal)}" disabled>
+          ${_tierDotHtml(tiers.get(code) ?? 'confirmed')}
           <span class="font-mono">${escapeHtml(code)}</span>
           ${hasLabel ? `<span class="text-gray-300">·</span><span class="truncate">${escapeHtml(label)}</span>` : ''}
         </label>`;
