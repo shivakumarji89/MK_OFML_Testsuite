@@ -611,6 +611,65 @@ function getChildSelections() {
   return result;
 }
 
+/**
+ * Permutation contribution of a root property and its full descendant chain.
+ * For each selected root value, delegates to _childSectionContribution for the
+ * child column's section keyed by that value, then sums the results.
+ */
+function _chainContribution(rootCol, childOfParent) {
+  const childCol = childOfParent.get(rootCol.name);
+  if (!childCol) {
+    return dimensionColumns.querySelectorAll(
+      `.dim-check[data-prop="${CSS.escape(rootCol.name)}"]:checked`
+    ).length;
+  }
+  const childColEl = dimensionColumns.querySelector(`[data-prop-name="${CSS.escape(childCol.name)}"]`);
+  if (!childColEl) {
+    return dimensionColumns.querySelectorAll(
+      `.dim-check[data-prop="${CSS.escape(rootCol.name)}"]:checked`
+    ).length;
+  }
+  let total = 0;
+  dimensionColumns.querySelectorAll(
+    `.dim-check[data-prop="${CSS.escape(rootCol.name)}"]:checked`
+  ).forEach(cb => {
+    const section = childColEl.querySelector(`.child-section[data-parent-val="${CSS.escape(cb.dataset.value)}"]`);
+    total += _childSectionContribution(childCol, section, childOfParent);
+  });
+  return total;
+}
+
+/**
+ * Permutation contribution of a child column within one parent-value section.
+ * If this child is itself a parent, recurses into its children; otherwise counts
+ * the checked child-checks within the section.
+ */
+function _childSectionContribution(col, sectionEl, childOfParent) {
+  if (!sectionEl) return 0;
+  const childCol = childOfParent.get(col.name);
+  if (!childCol) {
+    // Leaf: count checked values in this section.
+    return sectionEl.querySelectorAll(
+      `.child-check[data-prop="${CSS.escape(col.name)}"]:checked`
+    ).length;
+  }
+  // Intermediate: sum over each checked value the contribution of its grandchild section.
+  const childColEl = dimensionColumns.querySelector(`[data-prop-name="${CSS.escape(childCol.name)}"]`);
+  if (!childColEl) {
+    return sectionEl.querySelectorAll(
+      `.child-check[data-prop="${CSS.escape(col.name)}"]:checked`
+    ).length;
+  }
+  let total = 0;
+  sectionEl.querySelectorAll(
+    `.child-check[data-prop="${CSS.escape(col.name)}"]:checked`
+  ).forEach(cb => {
+    const section = childColEl.querySelector(`.child-section[data-parent-val="${CSS.escape(cb.dataset.value)}"]`);
+    total += _childSectionContribution(childCol, section, childOfParent);
+  });
+  return total;
+}
+
 function updatePermCount() {
   if (!currentSeed) { permCount.textContent = ''; return; }
 
@@ -625,19 +684,26 @@ function updatePermCount() {
     if (articleCount > 0) factors.push(articleCount);
   }
 
-  // Each property column contributes the count of its ticked checkboxes.
-  // Child columns: count ticked child-check boxes (0 = no explicit selection → treated as ×1, i.e. default applies).
-  // Parent columns: count ticked dim-check boxes.
+  // Build parent→child map for hierarchy-aware counting.
+  const childOfParent = new Map();
   for (const col of group.property_columns) {
+    if (col.is_child) childOfParent.set(col.parent, col);
+  }
+
+  // Each root (non-child) column contributes either its flat selected count
+  // (standalone) or its hierarchy chain contribution (head of a parent chain).
+  // Child columns are handled recursively inside _chainContribution and skipped here.
+  for (const col of group.property_columns) {
+    if (col.is_child) continue;
     let n;
-    if (col.is_child) {
-      n = dimensionColumns.querySelectorAll(
-        `.child-check[data-prop="${CSS.escape(col.name)}"]:checked`
-      ).length;
-    } else {
+    if (!childOfParent.has(col.name)) {
+      // Standalone property — count selected dim-checks directly.
       n = dimensionColumns.querySelectorAll(
         `.dim-check[data-prop="${CSS.escape(col.name)}"]:checked`
       ).length;
+    } else {
+      // Head of a hierarchy chain — sum leaf permutations through the chain.
+      n = _chainContribution(col, childOfParent);
     }
     if (n > 0) factors.push(n);
   }
