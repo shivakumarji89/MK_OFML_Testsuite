@@ -148,14 +148,15 @@ async def parse_seed_endpoint(
         raise HTTPException(status_code=422, detail=str(e))
 
     ranges = discover_ranges(repo)
+    seed_series = seed["series"]
     matched = next(
-        (r for r in ranges if r["range"].lower() == seed["series"].lower()),
+        (r for r in ranges if seed_series in r["series_codes"]),
         None,
     )
     if matched is None:
         raise HTTPException(
             status_code=404,
-            detail=f"No range found matching series '{seed['series']}' in repo '{repo}'"
+            detail=f"No range found matching series '{seed_series}' in repo '{repo}'"
         )
     db_path = matched["db_path"]
 
@@ -164,6 +165,7 @@ async def parse_seed_endpoint(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load range data: {e}")
 
+    artbase_restrictions = range_data.get("artbase_restrictions", {})
     short_id_relations = _build_short_id_relations(db_path)
 
     # Build values lookup: property_name -> list of {code, label}
@@ -226,6 +228,14 @@ async def parse_seed_endpoint(
                 for v in values_by_prop.get(p["name"], []):
                     prop_val_to_class[f"{p['name']}={v['code']}"] = p["article_class"]
 
+            # Build valid_values: only include properties that have artbase restrictions
+            art_restrictions = artbase_restrictions.get(article["article"], {})
+            valid_values: dict[str, list[str]] = {}
+            for p in article["properties"]:
+                restriction = art_restrictions.get(p["name"])
+                if restriction is not None:
+                    valid_values[p["name"]] = restriction
+
             # Wrap the single article element in a minimal cutBuffer for use as a seed template
             article_seed_xml = (
                 f"<?xml version='1.0' encoding='UTF-8'?>"
@@ -244,6 +254,7 @@ async def parse_seed_endpoint(
                 "property_to_class": property_to_class,
                 "prop_val_to_class": prop_val_to_class,
                 "seed_token": article_token,
+                "valid_values": valid_values,
             })
 
         groups.append({
