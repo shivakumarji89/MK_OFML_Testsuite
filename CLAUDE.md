@@ -16,11 +16,13 @@ The app is a suite of QA modules, each on its own page, linked from a dashboard 
 
 ## Key repositories
 
-**OFML SVN repository root:**
+**HermanMiller OFML SVN root:**
 `C:\HermanMillerOFMLSVN\Staging\HermanMiller\_repository`
+Manufacturer folder: `hmx` — Example ranges: `cosm`, `cloud`, `pullman`, `always`, `ratio_rebuild`
 
-Manufacturer folder: `hmx`
-Example ranges: `cosm`, `cloud`, `pullman`, `always`, `ratio_rebuild`
+**Knoll OFML SVN root:**
+`C:\KnollOFMLSVN\Staging\_repository`
+Manufacturer folder: `kno` — Example ranges: `saarinen`, and others
 
 OCD source files for a range live at:
 `{repo_root}/{manufacturer}/{range}/ANY/1/db/`
@@ -75,6 +77,19 @@ Returns: XML (single item) or ZIP (multiple items)
 Reference docs are in `Docs/`. The most relevant:
 - `ocd_4.3_en.md` — OCD data model, property/value/relation tables
 - `AN-2014-04_OCD_Features-EN.md` — OCD features and conditions
+
+## OFML data variability
+
+OFML product data is authored by different companies and teams, using different tools and conventions. This means the internal structure of OCD data can vary significantly between manufacturers, and even between ranges within the same manufacturer. There is no single "canonical" implementation — always investigate multiple ranges before drawing conclusions, and ground analysis in the official OFML documentation in `Docs/`.
+
+Two known structural styles for code schemes (how a full SKU is constructed from property values):
+
+- **HM style (e.g. Aeron):** `ocd_codescheme.csv` references a computed `Code` property (e.g. `AERON_OPTIONS:Code`). The full SKU formula lives in `ocd_relation.csv` as a mini-script: `Code = SUBSTR($BAN,0,3) + Assembly_Option + Aeron_Type + ...`. Properties are concatenated — some without spaces (positional), some with spaces as delimiters.
+- **Knoll style (e.g. Saarinen):** `ocd_codescheme.csv` contains a positional template directly: `@,@,@,@,@,Structure_Table:iStrFinish,K,Market:iMarket, ,Upholstery_Tulip:Group, ,Upholstery_Tulip:iFinish`. `@` = individual characters from the base article code. `ArticleClass:Property` = property value at that position. Segments may reference intermediate computed properties (e.g. `iStrFinish`, `iMarket`) whose values are derived from another relation.
+
+Other variations to be aware of:
+- Multi-market ranges have additional market folders (e.g. `ALLEURO`, `ALLGBP`) alongside `ANY` — these may have separate pricing but typically share OCD structure.
+- Some ranges have sub-range OAM namespaces that don't match the range folder name — the `read_prog_id` function handles this.
 
 ## Known limitations
 
