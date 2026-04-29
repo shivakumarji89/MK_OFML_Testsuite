@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Repo Search — OFML Testsuite</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen">
+
+  <header class="bg-white shadow">
+    <div id="headerRow" class="max-w-7xl mx-auto px-6 py-4 flex items-center gap-4">
+      <a href="/" class="text-gray-400 hover:text-gray-600 flex-shrink-0" title="Home">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12L11.204 3.045a1.125 1.125 0 0 1 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
+        </svg>
+      </a>
+      <div>
+        <h1 class="text-2xl font-bold text-gray-800">Repo Search</h1>
+        <p class="text-sm text-gray-500">Find a value across all ranges in a repository</p>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-6 py-8 space-y-6">
+
+    <!-- Controls card -->
+    <div class="bg-white rounded-xl shadow p-6 space-y-5">
+
+      <!-- Row 1: Repo + Query -->
+      <div class="flex flex-wrap gap-4 items-end">
+        <div class="flex flex-col gap-1 min-w-48">
+          <label class="text-xs font-medium text-gray-500 uppercase tracking-wide">Repository</label>
+          <select id="repoSelect"
+            class="border rounded px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400">
+            <option value="">— select repo —</option>
+          </select>
+          <p id="noReposMsg" class="text-xs text-amber-600 hidden">
+            No repos saved. Add one in <button id="openSettingsLink" class="underline">Settings</button>.
+          </p>
+        </div>
+
+        <div class="flex flex-col gap-1 flex-1 min-w-48">
+          <label class="text-xs font-medium text-gray-500 uppercase tracking-wide">Search</label>
+          <input id="queryInput" type="text" placeholder="e.g. H80040"
+            class="border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <label class="text-xs font-medium text-gray-500 uppercase tracking-wide">Match</label>
+          <select id="matchMode"
+            class="border rounded px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400">
+            <option value="contains">Contains</option>
+            <option value="equals">Equals</option>
+            <option value="starts_with">Starts with</option>
+            <option value="ends_with">Ends with</option>
+          </select>
+        </div>
+
+        <div class="flex items-center gap-2 pb-2">
+          <input id="caseSensitive" type="checkbox" class="rounded">
+          <label for="caseSensitive" class="text-sm text-gray-600">Case sensitive</label>
+        </div>
+      </div>
+
+      <!-- Row 2: File types -->
+      <div>
+        <p class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">File types</p>
+        <div id="fileTypeChecks" class="flex flex-wrap gap-3">
+          <!-- populated by JS -->
+        </div>
+      </div>
+
+      <!-- Row 3: Search button -->
+      <div class="flex items-center gap-4">
+        <button id="searchBtn"
+          class="px-5 py-2 rounded bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+          disabled>
+          Search
+        </button>
+        <span id="statusMsg" class="text-sm text-gray-500"></span>
+      </div>
+    </div>
+
+    <!-- Results -->
+    <div id="results"></div>
+
+  </main>
+
+  <script src="/static/settings.js"></script>
+  <script src="/static/search/search.js"></script>
+  <script>
+    initSettingsGear(document.getElementById('headerRow'));
+    populateRepos();
+  </script>
+</body>
+</html>
