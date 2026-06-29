@@ -407,3 +407,38 @@ def test_generate_with_matching_locksteps_values():
     # One permutation, Seat locked to Shell's 1HA
     assert "Shell_Fabric_Type=1HA" in body
     assert "Seat_Fabric_Type=1HA" in body
+
+
+def test_generate_with_hierarchical_matching_identical_fabric():
+    parse = _upload_seed(CLOUD_SEED_XML)
+    if parse.status_code != 200:
+        pytest.skip(f"CLOUD range data unavailable in repo checkout (status {parse.status_code})")
+    data = parse.json()
+    group = data["groups"][0]
+    art = group["articles"][0]
+    col_names = {c["name"] for c in group["property_columns"]}
+    assert {"Shell_Fabric_Type", "Seat_Fabric_Type"} <= col_names
+
+    payload = {
+        "manufacturer": data["manufacturer"],
+        "series": data["series"],
+        "filename": "match_hier.obx",
+        "queue": [{
+            "articles": [art],
+            "selected_article_codes": [art["code"]],
+            "selected_properties": {"Shell_Fabric_Type": ["1HA"]},
+            "child_resolutions": {},  # Shell colour omitted for simplicity; type is enough here
+            "match_resolutions": {
+                "Seat_Fabric_Type": {
+                    "match_to": "Shell_Fabric_Type",
+                    "matched_values": ["1HA"], "extras": [],
+                },
+            },
+            "filename": "match_hier.obx",
+        }],
+    }
+    resp = client.post("/api/snapper/generate", json=payload)
+    assert resp.status_code == 200
+    body = resp.text
+    assert "Shell_Fabric_Type=1HA" in body
+    assert "Seat_Fabric_Type=1HA" in body
