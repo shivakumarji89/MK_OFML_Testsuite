@@ -507,24 +507,24 @@ function renderDimensions() {
 
     const kind = _colKind(col, parentHasChild);  // 'standalone' | 'parent'
 
-    // Matched standalone or matched parent -> matched column (parent suppresses extras).
-    if (cfg[col.name]) {
-      dimensionColumns.appendChild(
-        _buildMatchedColumn(col, group, cfg[col.name], kind === 'standalone'));
-      continue;
-    }
-
     const wrapper = document.createElement('div');
     wrapper.className = 'flex flex-col gap-1';
 
-    // Offer a selector unless this column is itself a target of another match.
-    if (!targets.has(col.name)) {
-      wrapper.appendChild(_buildMatchSelector(col, group, parentHasChild, cfg));
+    if (cfg[col.name]) {
+      // Matched standalone or matched parent -> matched column (parent suppresses extras).
+      // The child chain below still renders, so a matched parent keeps its colour child
+      // (as a read-only "follows" column) rather than dropping it.
+      wrapper.appendChild(
+        _buildMatchedColumn(col, group, cfg[col.name], kind === 'standalone'));
+    } else {
+      // Offer a selector unless this column is itself a target of another match.
+      if (!targets.has(col.name)) {
+        wrapper.appendChild(_buildMatchSelector(col, group, parentHasChild, cfg));
+      }
+      wrapper.appendChild(
+        _buildCheckboxColumn(col.name, col.values, col.seed_value, state.dimSelections, group.articles)
+      );
     }
-
-    wrapper.appendChild(
-      _buildCheckboxColumn(col.name, col.values, col.seed_value, state.dimSelections, group.articles)
-    );
 
     // Child chain: render each child as matched (read-only) or as a normal child column.
     let current = col.name;
