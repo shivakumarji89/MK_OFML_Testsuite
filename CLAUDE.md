@@ -14,6 +14,8 @@ The app is a suite of QA modules, each on its own page, linked from a dashboard 
 4. Select values, optionally label the article, then click **Add to Queue**. Repeat for other articles in the same range.
 5. Click **Generate All** to download a single OBX (one article) or a zip of OBX files (multiple articles). Import into pCon and run **Update** to resolve prices and descriptions.
 
+**Matching ("Match to…"):** A standalone property column can be set to track an earlier standalone column in lockstep via its "Match to…" selector. The matched column's value is copied from its target per permutation (the cartesian product collapses to matched pairs), and any matched-only "extra" values the user ticks are appended bound to the target's first-selected value (the anchor).
+
 ## Key repositories
 
 **HermanMiller OFML SVN root:**
@@ -69,7 +71,8 @@ Returns: `{ article, manufacturer, series, repo, db_path, property_columns }`
 Each column: `{ name, article_class, seed_value, values, is_child, parent, mapping }`
 
 **POST `/api/snapper/generate`** — JSON: `{ manufacturer, series, queue, filename }`
-Each queue item: `{ article, article_class, property_to_class, prop_val_to_class, selected_properties }`
+Each queue item: `{ article, article_class, property_to_class, prop_val_to_class, selected_properties, child_resolutions, match_resolutions }`
+- `match_resolutions`: `{ matched_prop: { match_to, matched_values, extras } }` — lockstep matching of a column to an earlier column (see "Matching" above).
 Returns: XML (single item) or ZIP (multiple items)
 
 ## OFML documentation
