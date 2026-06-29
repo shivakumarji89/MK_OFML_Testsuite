@@ -13,7 +13,7 @@ SEARCHABLE_FILES = {
     "ocd_artshorttext",
     "ocd_property",
     "ocd_propertytext",
-    "ocd_propvalue",
+    "ocd_propertyvalue",
     "ocd_propvaluetext",
 }
 

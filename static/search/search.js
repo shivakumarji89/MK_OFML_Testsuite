@@ -5,7 +5,7 @@ const FILE_TYPES = [
   'ocd_artshorttext',
   'ocd_property',
   'ocd_propertytext',
-  'ocd_propvalue',
+  'ocd_propertyvalue',
   'ocd_propvaluetext',
 ];
 
@@ -109,6 +109,8 @@ async function runSearch() {
 }
 
 // ── Results rendering ─────────────────────────────────────────────────────────
+let _lastGrouped = [];  // [{manufacturer, range}] — used by copy/export handlers
+
 function renderResults(data, query) {
   const { results, ranges_searched, duration_ms } = data;
   const matchCount = results.reduce((n, r) => n + r.matches.length, 0);
@@ -121,15 +123,41 @@ function renderResults(data, query) {
     grouped[key].files.push({ file_type: r.file_type, matches: r.matches });
   }
 
-  const rangeCount = Object.keys(grouped).length;
+  _lastGrouped = Object.values(grouped).map(g => ({ manufacturer: g.manufacturer, range: g.range }));
+  const rangeCount = _lastGrouped.length;
 
-  let html = `<p class="text-sm text-gray-500 mb-4">`;
+  let html = `<div class="flex flex-wrap items-center gap-3 mb-4">`;
+  html += `<p class="text-sm text-gray-500 flex-1">`;
   if (matchCount === 0) {
     html += `No matches found — searched ${ranges_searched} range${ranges_searched !== 1 ? 's' : ''} in ${duration_ms}ms.`;
   } else {
     html += `Found <strong>${matchCount}</strong> match${matchCount !== 1 ? 'es' : ''} across <strong>${rangeCount}</strong> range${rangeCount !== 1 ? 's' : ''} (searched ${ranges_searched} in ${duration_ms}ms).`;
   }
   html += `</p>`;
+
+  if (rangeCount > 0) {
+    html += `
+      <button id="copyListBtn"
+        class="flex items-center gap-1.5 px-3 py-1.5 rounded border border-gray-300 text-xs text-gray-600
+               hover:bg-gray-50 active:bg-gray-100 transition">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M15.666 3.888A2.25 2.25 0 0 0 13.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 0 1-.75.75H9a.75.75 0 0 1-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 0 1-2.25 2.25H6.75A2.25 2.25 0 0 1 4.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 0 1 1.927-.184" />
+        </svg>
+        Copy list
+      </button>
+      <button id="exportCsvBtn"
+        class="flex items-center gap-1.5 px-3 py-1.5 rounded border border-gray-300 text-xs text-gray-600
+               hover:bg-gray-50 active:bg-gray-100 transition">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+        </svg>
+        Export CSV
+      </button>`;
+  }
+
+  html += `</div>`;
 
   for (const [key, group] of Object.entries(grouped)) {
     html += `
@@ -149,6 +177,31 @@ function renderResults(data, query) {
 
   statusMsg.textContent = '';
   resultsEl.innerHTML = html;
+
+  document.getElementById('copyListBtn')?.addEventListener('click', copyList);
+  document.getElementById('exportCsvBtn')?.addEventListener('click', exportCsv);
+}
+
+function copyList() {
+  const text = _lastGrouped.map(r => `${r.manufacturer}/${r.range}`).join('\n');
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copyListBtn');
+    if (!btn) return;
+    const original = btn.innerHTML;
+    btn.innerHTML = btn.innerHTML.replace('Copy list', 'Copied!');
+    setTimeout(() => { btn.innerHTML = original; }, 1500);
+  });
+}
+
+function exportCsv() {
+  const rows = ['manufacturer,range', ..._lastGrouped.map(r => `${r.manufacturer},${r.range}`)];
+  const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'repo-search-ranges.csv';
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function renderFileBlock({ file_type, matches }) {
