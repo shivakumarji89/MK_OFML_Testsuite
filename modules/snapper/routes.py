@@ -307,11 +307,18 @@ class ChildResolution(BaseModel):
     resolution: dict[str, list[str]]  # {parent_value: [child_values]}, empty list = omit child
 
 
+class MatchResolution(BaseModel):
+    match_to: str                    # target (X) property name, appears earlier
+    matched_values: list[str] = []   # selected X values that also exist in Y's set
+    extras: list[str] = []           # Y-only values the user ticked
+
+
 class QueueItem(BaseModel):
     articles: list[ArticleInfo]
     selected_article_codes: list[str]
     selected_properties: dict[str, list[str]]   # parent-only dimensions
     child_resolutions: dict[str, ChildResolution] = {}
+    match_resolutions: dict[str, MatchResolution] = {}
     filename: str = ""
 
 
@@ -432,6 +439,16 @@ def generate_obx(req: GenerateRequest):
             for name, cr in item.child_resolutions.items()
         }
         permutations = expand_permutations_with_children(permutations, child_res_dicts)
+
+        match_res_dicts = {
+            name: {
+                "match_to": mr.match_to,
+                "matched_values": mr.matched_values,
+                "extras": mr.extras,
+            }
+            for name, mr in item.match_resolutions.items()
+        }
+        permutations = apply_matches(permutations, match_res_dicts, item.selected_properties)
 
         # Build per-article seed XMLs and class maps
         article_seeds: dict[str, str] = {}
