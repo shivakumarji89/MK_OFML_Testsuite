@@ -367,3 +367,43 @@ def test_generate_raw_seed_404_for_unknown_range(tmp_path):
     })
     assert response.status_code == 404
 
+
+
+def test_generate_with_matching_locksteps_values():
+    parse = _upload_seed(CLOUD_SEED_XML)
+    if parse.status_code != 200:
+        pytest.skip(f"CLOUD range data unavailable in repo checkout (status {parse.status_code})")
+    data = parse.json()
+    group = data["groups"][0]
+    art = group["articles"][0]
+
+    # Sanity: both fabric-type props exist as standalone columns
+    col_names = {c["name"] for c in group["property_columns"]}
+    assert {"Shell_Fabric_Type", "Seat_Fabric_Type"} <= col_names
+
+    payload = {
+        "manufacturer": data["manufacturer"],
+        "series": data["series"],
+        "filename": "match_test.obx",
+        "queue": [{
+            "articles": [art],
+            "selected_article_codes": [art["code"]],
+            # Shell is the free target dimension; Seat is matched (excluded here)
+            "selected_properties": {"Shell_Fabric_Type": ["1HA"]},
+            "child_resolutions": {},
+            "match_resolutions": {
+                "Seat_Fabric_Type": {
+                    "match_to": "Shell_Fabric_Type",
+                    "matched_values": ["1HA"],
+                    "extras": [],
+                }
+            },
+            "filename": "match_test.obx",
+        }],
+    }
+    resp = client.post("/api/snapper/generate", json=payload)
+    assert resp.status_code == 200
+    body = resp.text
+    # One permutation, Seat locked to Shell's 1HA
+    assert "Shell_Fabric_Type=1HA" in body
+    assert "Seat_Fabric_Type=1HA" in body
