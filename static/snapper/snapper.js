@@ -834,8 +834,10 @@ function getChildSelections() {
   const group = currentSeed.groups[currentGroupIndex];
   if (!group) return {};
   const result = {};
+  const cfg = _currentMatchConfig();
   for (const col of group.property_columns) {
     if (!col.is_child) continue;
+    if (cfg[col.name]) continue;   // matched child is filled by apply_matches, not expansion
     const resolution = {};
     for (const parentVal of Object.keys(col.mapping || {})) {
       const selected = [];
@@ -1013,16 +1015,29 @@ function buildClassMaps() {
 }
 
 // ── Add to queue ───────────────────────────────────────────────────────────────
+function _selectedTargetValues(targetName, group, parentSelections) {
+  // A child target's selected values live in .child-check ticks; everything else in dims.
+  const targetCol = group.property_columns.find(c => c.name === targetName);
+  if (targetCol?.is_child) {
+    const out = [];
+    dimensionColumns
+      .querySelectorAll(`.child-check[data-prop="${CSS.escape(targetName)}"]:checked`)
+      .forEach(cb => out.push(cb.dataset.value));
+    return out;
+  }
+  return parentSelections[targetName] || [];
+}
+
 function buildMatchResolutions(group, parentSelections) {
   const cfg = _currentMatchConfig();
   const out = {};
   for (const [matchedProp, m] of Object.entries(cfg)) {
-    const targetCol = group.property_columns.find(c => c.name === m.matchTo);
-    const targetCodes = new Set((targetCol?.values || []).map(v => v.code));
-    const selectedX = parentSelections[m.matchTo] || [];
+    const sourceCol = group.property_columns.find(c => c.name === matchedProp);
+    const sourceCodes = new Set((sourceCol?.values || []).map(v => v.code));  // validity filter
+    const selectedX = _selectedTargetValues(m.matchTo, group, parentSelections);
     out[matchedProp] = {
       match_to: m.matchTo,
-      matched_values: selectedX.filter(v => targetCodes.has(v)),
+      matched_values: selectedX.filter(v => sourceCodes.has(v)),  // only values Y actually has
       extras: [...(m.extras || [])],
     };
   }
