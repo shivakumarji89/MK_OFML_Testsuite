@@ -14,7 +14,7 @@ The app is a suite of QA modules, each on its own page, linked from a dashboard 
 4. Select values, optionally label the article, then click **Add to Queue**. Repeat for other articles in the same range.
 5. Click **Generate All** to download a single OBX (one article) or a zip of OBX files (multiple articles). Import into pCon and run **Update** to resolve prices and descriptions.
 
-**Matching ("Match to…"):** A standalone property column can be set to track an earlier standalone column in lockstep via its "Match to…" selector. The matched column's value is copied from its target per permutation (the cartesian product collapses to matched pairs), and any matched-only "extra" values the user ticks are appended bound to the target's first-selected value (the anchor).
+**Matching ("Match to…"):** A property column can be set to track another eligible column in lockstep via its "Match to…" selector (standalone↔standalone, parent↔parent, child↔child; the target must itself be unmatched, which prevents chains). The matched column's value is copied from its target per permutation (the cartesian product collapses to matched pairs), and any matched-only "extra" values the user ticks are appended bound to the target's first-selected value (the anchor). Hierarchical fabrics: matching a fabric **type** to another type auto-matches their colour **children** in lockstep (one action ⇒ identical fabric); colours that don't exist on the matched side are omitted (pCon default).
 
 ## Key repositories
 
