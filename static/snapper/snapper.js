@@ -563,8 +563,26 @@ function _buildCheckboxColumn(propName, values, seedValue, savedDimSelections, a
 
 function onDimensionChange() {
   _updateChildSections();
+  _updateMatchedColumns();
   _updateAllTierIndicators();
   updatePermCount();
+}
+
+function _updateMatchedColumns() {
+  if (!currentSeed) return;
+  const group = currentSeed.groups[currentGroupIndex];
+  if (!group) return;
+  const cfg = _currentMatchConfig();
+  for (const [matchedProp, m] of Object.entries(cfg)) {
+    const selectedTarget = new Set(
+      [...dimensionColumns.querySelectorAll(
+        `.dim-check[data-prop="${CSS.escape(m.matchTo)}"]:checked`)]
+        .map(cb => cb.dataset.value)
+    );
+    dimensionColumns
+      .querySelectorAll(`.match-locked-check[data-prop="${CSS.escape(matchedProp)}"]`)
+      .forEach(cb => { cb.checked = selectedTarget.has(cb.dataset.value); });
+  }
 }
 
 function _updateChildSections() {
@@ -864,20 +882,34 @@ function updatePermCount() {
   }
 
   const count = factors.length ? factors.reduce((a, b) => a * b, 1) : 0;
-  currentPermCount = count;
-  permCount.textContent = `${count.toLocaleString()} permutations`;
+
+  // Extras from matched columns ride the anchor slice: e × (P / Xfactor).
+  const cfg = _currentMatchConfig();
+  let extrasTotal = 0;
+  for (const [matchedProp, m] of Object.entries(cfg)) {
+    const e = dimensionColumns.querySelectorAll(
+      `.match-extra-check[data-prop="${CSS.escape(matchedProp)}"]:checked`).length;
+    if (!e) continue;
+    const xFactor = dimensionColumns.querySelectorAll(
+      `.dim-check[data-prop="${CSS.escape(m.matchTo)}"]:checked`).length;
+    if (xFactor > 0) extrasTotal += e * (count / xFactor);
+  }
+  const total = count + extrasTotal;
+
+  currentPermCount = total;
+  permCount.textContent = `${total.toLocaleString()} permutations`;
   permCount.className = 'text-sm font-medium ' + (
-    count > ERROR_LIMIT ? 'text-red-600' :
-    count > WARN_LIMIT  ? 'text-amber-600' : 'text-gray-700'
+    total > ERROR_LIMIT ? 'text-red-600' :
+    total > WARN_LIMIT  ? 'text-amber-600' : 'text-gray-700'
   );
-  if (count > ERROR_LIMIT) permCount.textContent += ` ⚠ Consider splitting (max: ${ERROR_LIMIT.toLocaleString()})`;
+  if (total > ERROR_LIMIT) permCount.textContent += ` ⚠ Consider splitting (max: ${ERROR_LIMIT.toLocaleString()})`;
 
   // Disable Add to Queue if no articles selected in multi-article groups
   if (group.articles.length > 1) {
     const articleCount = document.querySelectorAll('.article-check:checked').length;
-    addToQueueBtn.disabled = articleCount === 0 || count === 0;
+    addToQueueBtn.disabled = articleCount === 0 || total === 0;
   } else {
-    addToQueueBtn.disabled = count === 0;
+    addToQueueBtn.disabled = total === 0;
   }
 
   updateFilenamePreview();
@@ -916,6 +948,22 @@ function buildClassMaps() {
 }
 
 // ── Add to queue ───────────────────────────────────────────────────────────────
+function buildMatchResolutions(group, parentSelections) {
+  const cfg = _currentMatchConfig();
+  const out = {};
+  for (const [matchedProp, m] of Object.entries(cfg)) {
+    const targetCol = group.property_columns.find(c => c.name === m.matchTo);
+    const targetCodes = new Set((targetCol?.values || []).map(v => v.code));
+    const selectedX = parentSelections[m.matchTo] || [];
+    out[matchedProp] = {
+      match_to: m.matchTo,
+      matched_values: selectedX.filter(v => targetCodes.has(v)),
+      extras: [...(m.extras || [])],
+    };
+  }
+  return out;
+}
+
 addToQueueBtn.addEventListener('click', () => {
   if (!currentSeed) return;
   const group = currentSeed.groups[currentGroupIndex];
@@ -960,6 +1008,7 @@ addToQueueBtn.addEventListener('click', () => {
     selectedArticleCodes: selectedArticles.map(a => a.code),
     selectedProperties: parentSelections,
     childResolutions: getChildSelections(),
+    matchResolutions: buildMatchResolutions(group, parentSelections),
     count: currentPermCount,
     keptCount: null,
     removedCount: null,
@@ -1122,6 +1171,7 @@ async function _doGenerate(items, filename) {
       selected_article_codes: e.selectedArticleCodes,
       selected_properties: e.selectedProperties,
       child_resolutions: e.childResolutions || {},
+      match_resolutions: e.matchResolutions || {},
       filename: e.filename,
     })),
   };
