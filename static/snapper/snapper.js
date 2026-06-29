@@ -354,11 +354,27 @@ function _buildMatchSelector(col, group, parentHasChild, cfg) {
 }
 
 function onMatchTargetChange(propName, targetName) {
+  const group = currentSeed.groups[currentGroupIndex];
+  const parentHasChild = _parentHasChildMap(group);
   const cfg = _currentMatchConfig();
-  if (targetName) cfg[propName] = { matchTo: targetName, extras: [] };
-  else delete cfg[propName];
+
+  if (targetName) {
+    cfg[propName] = { matchTo: targetName, extras: [] };
+    // Auto-pair: if both source and target are parents with a child, match the children too.
+    const srcChild = parentHasChild.get(propName);
+    const tgtChild = parentHasChild.get(targetName);
+    if (srcChild && tgtChild) {
+      cfg[srcChild] = { matchTo: tgtChild, extras: [], auto: true };
+    }
+  } else {
+    // Unmatch: drop this match and any child match auto-created for it.
+    const srcChild = parentHasChild.get(propName);
+    delete cfg[propName];
+    if (srcChild && cfg[srcChild]?.auto) delete cfg[srcChild];
+  }
+
   groupStates[currentGroupIndex].matchConfig = cfg;
-  renderDimensions();   // re-render: column converts to matched layout (or back)
+  renderDimensions();
 }
 
 function _buildMatchedColumn(col, group, matchCfg) {
