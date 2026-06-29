@@ -377,7 +377,7 @@ function onMatchTargetChange(propName, targetName) {
   renderDimensions();
 }
 
-function _buildMatchedColumn(col, group, matchCfg) {
+function _buildMatchedColumn(col, group, matchCfg, allowExtras = true) {
   const targetCol = group.property_columns.find(c => c.name === matchCfg.matchTo);
   const targetCodes = new Set((targetCol?.values || []).map(v => v.code));
   // Currently-ticked target values drive which matched rows are checked.
@@ -389,7 +389,7 @@ function _buildMatchedColumn(col, group, matchCfg) {
   const extras = new Set(matchCfg.extras || []);
 
   const matchedVals = col.values.filter(v => targetCodes.has(v.code));
-  const extraVals = col.values.filter(v => !targetCodes.has(v.code));
+  const extraVals = allowExtras ? col.values.filter(v => !targetCodes.has(v.code)) : [];
 
   const el = document.createElement('div');
   el.className = 'bg-white rounded-lg shadow p-3 min-w-44 max-w-56 flex flex-col';
@@ -439,6 +439,37 @@ function _buildMatchedColumn(col, group, matchCfg) {
   return el;
 }
 
+function _buildMatchedChildColumn(col, group, matchCfg, parentHasChild) {
+  const el = document.createElement('div');
+  el.className = 'bg-white rounded-lg shadow p-3 min-w-44 max-w-56 flex flex-col';
+  el.dataset.propName = col.name;
+
+  // Parent of this child, and whether that parent is itself matched (consistency check).
+  const cfg = _currentMatchConfig();
+  const parentMatched = col.parent && !!cfg[col.parent];
+  const warn = !parentMatched
+    ? `<div class="text-xs text-amber-600 mb-2">⚠ ${escapeHtml(col.parent || 'type')} is not
+         matched — the varcode may be inconsistent.</div>`
+    : '';
+
+  el.innerHTML = `
+    <div class="font-semibold text-sm text-gray-700 mb-0.5 border-b pb-1" title="${escapeHtml(col.name)}">${escapeHtml(col.name)}</div>
+    <div class="mb-2">
+      <label class="text-xs text-gray-500">Match to…
+        <select class="match-select text-xs border rounded px-1 py-0.5 w-full mt-0.5" data-prop="${escapeHtml(col.name)}">
+          <option value="">Not matched</option>
+          <option value="${escapeHtml(matchCfg.matchTo)}" selected>${escapeHtml(matchCfg.matchTo)}</option>
+        </select></label>
+    </div>
+    ${warn}
+    <div class="text-xs text-gray-400">🔗 follows ${escapeHtml(matchCfg.matchTo)}${
+      matchCfg.auto ? ` (via ${escapeHtml(col.parent)})` : ''}</div>`;
+
+  el.querySelector('.match-select').addEventListener('change', (e) =>
+    onMatchTargetChange(col.name, e.target.value));
+  return el;
+}
+
 function onMatchExtraChange() {
   // Persist the ticked extras into matchConfig, then refresh the counter.
   const cfg = _currentMatchConfig();
@@ -467,45 +498,49 @@ function renderDimensions() {
     dimensionColumns.appendChild(_buildArticleColumn(group.articles, state.articleSelections));
   }
 
-  const parentHasChild = new Map();
-  for (const col of group.property_columns) {
-    if (col.is_child) parentHasChild.set(col.parent, col.name);
-  }
-
-  const matchable = new Set(_matchableColumns(group, parentHasChild).map(c => c.name));
+  const parentHasChild = _parentHasChildMap(group);
   const targets = _matchTargets();
   const cfg = _currentMatchConfig();
 
   for (const col of group.property_columns) {
-    if (col.is_child) continue;
+    if (col.is_child) continue;  // children are rendered inside their parent's chain
 
-    // Matched columns render their own matched/extras layout (standalone only).
-    if (matchable.has(col.name) && cfg[col.name]) {
-      dimensionColumns.appendChild(_buildMatchedColumn(col, group, cfg[col.name]));
+    const kind = _colKind(col, parentHasChild);  // 'standalone' | 'parent'
+
+    // Matched standalone or matched parent -> matched column (parent suppresses extras).
+    if (cfg[col.name]) {
+      dimensionColumns.appendChild(
+        _buildMatchedColumn(col, group, cfg[col.name], kind === 'standalone'));
       continue;
     }
 
     const wrapper = document.createElement('div');
     wrapper.className = 'flex flex-col gap-1';
-    // Standalone matchable columns that are not themselves a target get a selector.
-    if (matchable.has(col.name) && !targets.has(col.name)) {
-      wrapper.appendChild(_buildMatchSelector(col, group, matchable, targets, cfg));
+
+    // Offer a selector unless this column is itself a target of another match.
+    if (!targets.has(col.name)) {
+      wrapper.appendChild(_buildMatchSelector(col, group, parentHasChild, cfg));
     }
+
     wrapper.appendChild(
       _buildCheckboxColumn(col.name, col.values, col.seed_value, state.dimSelections, group.articles)
     );
-    // Follow the child chain to any depth (e.g. Group → Fabric → Finish → …).
-    // parentHasChild maps each parent to its immediate child; the while-loop
-    // traverses the full linear chain without needing to change the map itself.
+
+    // Child chain: render each child as matched (read-only) or as a normal child column.
     let current = col.name;
     while (true) {
       const nextName = parentHasChild.get(current);
       if (!nextName) break;
       const nextCol = group.property_columns.find(c => c.name === nextName);
       if (!nextCol) break;
-      wrapper.appendChild(_buildChildColumn(nextCol, group.articles));
+      if (cfg[nextName]) {
+        wrapper.appendChild(_buildMatchedChildColumn(nextCol, group, cfg[nextName], parentHasChild));
+      } else {
+        wrapper.appendChild(_buildChildColumn(nextCol, group.articles));
+      }
       current = nextName;
     }
+
     dimensionColumns.appendChild(wrapper);
   }
   updatePermCount();
