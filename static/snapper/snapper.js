@@ -217,6 +217,7 @@ parseSeedBtn.addEventListener('click', async () => {
   groupStates = currentSeed.groups.map(() => ({
     articleSelections: null,   // null = all checked (default); set on first change
     dimSelections: {},         // { propName: [checkedValues] }
+    matchConfig: {},           // { matchedProp: { matchTo, extras: [codes] } }
   }));
   currentGroupIndex = 0;
 
@@ -280,6 +281,145 @@ function _saveGroupState() {
     dims[cb.dataset.prop].push(cb.dataset.value);
   });
   state.dimSelections = dims;
+
+  // Refresh extras from any rendered match-extra checkboxes
+  const cfg = state.matchConfig || {};
+  for (const matchedProp of Object.keys(cfg)) {
+    const ticked = [];
+    dimensionColumns
+      .querySelectorAll(`.match-extra-check[data-prop="${CSS.escape(matchedProp)}"]:checked`)
+      .forEach(cb => ticked.push(cb.dataset.value));
+    cfg[matchedProp].extras = ticked;
+  }
+  state.matchConfig = cfg;
+}
+
+// ── Property value matching ("Match to…") ───────────────────────────────────────
+function _matchableColumns(group, parentHasChild) {
+  // Standalone columns only: not a child, not a parent.
+  return group.property_columns.filter(
+    c => !c.is_child && !parentHasChild.has(c.name)
+  );
+}
+
+function _currentMatchConfig() {
+  return (groupStates[currentGroupIndex] || {}).matchConfig || {};
+}
+
+function _matchTargets() {
+  // Set of property names currently used as a match target (match_to).
+  const cfg = _currentMatchConfig();
+  return new Set(Object.values(cfg).map(m => m.matchTo));
+}
+
+function _buildMatchSelector(col, group, matchable, targets, cfg) {
+  const colIndex = group.property_columns.findIndex(c => c.name === col.name);
+  const options = group.property_columns
+    .filter((c, i) =>
+      i < colIndex &&            // earlier than this column
+      matchable.has(c.name) &&   // standalone
+      !cfg[c.name] &&            // target is not itself matched (no chains)
+      c.name !== col.name)
+    .map(c => `<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)}</option>`)
+    .join('');
+  const sel = document.createElement('div');
+  sel.className = 'mb-2';
+  sel.innerHTML = options
+    ? `<label class="text-xs text-gray-500">Match to…
+         <select class="match-select text-xs border rounded px-1 py-0.5 w-full mt-0.5"
+                 data-prop="${escapeHtml(col.name)}">
+           <option value="">Not matched</option>${options}
+         </select></label>`
+    : '';  // nothing earlier to match to -> no selector
+  const select = sel.querySelector('.match-select');
+  if (select) {
+    select.value = cfg[col.name]?.matchTo || '';
+    select.addEventListener('change', () => onMatchTargetChange(col.name, select.value));
+  }
+  return sel;
+}
+
+function onMatchTargetChange(propName, targetName) {
+  const cfg = _currentMatchConfig();
+  if (targetName) cfg[propName] = { matchTo: targetName, extras: [] };
+  else delete cfg[propName];
+  groupStates[currentGroupIndex].matchConfig = cfg;
+  renderDimensions();   // re-render: column converts to matched layout (or back)
+}
+
+function _buildMatchedColumn(col, group, matchCfg) {
+  const targetCol = group.property_columns.find(c => c.name === matchCfg.matchTo);
+  const targetCodes = new Set((targetCol?.values || []).map(v => v.code));
+  // Currently-ticked target values drive which matched rows are checked.
+  const selectedTarget = new Set(
+    [...dimensionColumns.querySelectorAll(
+      `.dim-check[data-prop="${CSS.escape(matchCfg.matchTo)}"]:checked`)]
+      .map(cb => cb.dataset.value)
+  );
+  const extras = new Set(matchCfg.extras || []);
+
+  const matchedVals = col.values.filter(v => targetCodes.has(v.code));
+  const extraVals = col.values.filter(v => !targetCodes.has(v.code));
+
+  const el = document.createElement('div');
+  el.className = 'bg-white rounded-lg shadow p-3 min-w-44 max-w-56 flex flex-col';
+  el.dataset.propName = col.name;
+
+  const matchedRows = matchedVals.map(v => `
+    <label class="flex items-center gap-1 text-xs text-gray-500 cursor-not-allowed">
+      <input type="checkbox" class="match-locked-check" disabled
+        data-prop="${escapeHtml(col.name)}" data-value="${escapeHtml(v.code)}"
+        ${selectedTarget.has(v.code) ? 'checked' : ''}>
+      <span class="text-blue-400">🔗</span>
+      <span class="font-mono text-gray-500">${escapeHtml(v.code)}</span>
+      ${v.label && v.label !== v.code ? `<span class="text-gray-300">·</span><span class="truncate">${escapeHtml(v.label)}</span>` : ''}
+    </label>`).join('');
+
+  const extraRows = extraVals.map(v => `
+    <label class="flex items-center gap-1 text-xs text-gray-700 cursor-pointer">
+      <input type="checkbox" class="match-extra-check"
+        data-prop="${escapeHtml(col.name)}" data-value="${escapeHtml(v.code)}"
+        ${extras.has(v.code) ? 'checked' : ''}>
+      <span class="font-mono text-gray-500">${escapeHtml(v.code)}</span>
+      ${v.label && v.label !== v.code ? `<span class="text-gray-300">·</span><span class="truncate">${escapeHtml(v.label)}</span>` : ''}
+    </label>`).join('');
+
+  el.innerHTML = `
+    <div class="font-semibold text-sm text-gray-700 mb-0.5 border-b pb-1" title="${escapeHtml(col.name)}">${escapeHtml(col.name)}</div>
+    <div class="mb-2">
+      <label class="text-xs text-gray-500">Match to…
+        <select class="match-select text-xs border rounded px-1 py-0.5 w-full mt-0.5" data-prop="${escapeHtml(col.name)}">
+          <option value="">Not matched</option>
+          <option value="${escapeHtml(matchCfg.matchTo)}" selected>${escapeHtml(matchCfg.matchTo)}</option>
+        </select></label>
+    </div>
+    <div class="text-xs text-gray-400 mb-2">🔗 matched to ${escapeHtml(matchCfg.matchTo)} · extras pair with first-selected ${escapeHtml(matchCfg.matchTo)}</div>
+    <div class="overflow-y-auto max-h-64">
+      <div class="text-xs font-mono text-gray-300 px-1 pb-0.5 border-b border-gray-100 mb-0.5">Matched</div>
+      <div class="pl-1 space-y-0.5 mb-2">${matchedRows || '<div class="text-xs text-gray-300 italic">none</div>'}</div>
+      ${extraVals.length ? `
+        <div class="text-xs font-mono text-gray-300 px-1 pb-0.5 border-b border-gray-100 mb-0.5">Extra (independent)</div>
+        <div class="pl-1 space-y-0.5">${extraRows}</div>` : ''}
+    </div>`;
+
+  el.querySelector('.match-select').addEventListener('change', (e) =>
+    onMatchTargetChange(col.name, e.target.value));
+  el.querySelectorAll('.match-extra-check').forEach(cb =>
+    cb.addEventListener('change', onMatchExtraChange));
+  return el;
+}
+
+function onMatchExtraChange() {
+  // Persist the ticked extras into matchConfig, then refresh the counter.
+  const cfg = _currentMatchConfig();
+  for (const matchedProp of Object.keys(cfg)) {
+    const ticked = [];
+    dimensionColumns
+      .querySelectorAll(`.match-extra-check[data-prop="${CSS.escape(matchedProp)}"]:checked`)
+      .forEach(cb => ticked.push(cb.dataset.value));
+    cfg[matchedProp].extras = ticked;
+  }
+  updatePermCount();
 }
 
 // ── Dimension columns ──────────────────────────────────────────────────────────
@@ -302,10 +442,25 @@ function renderDimensions() {
     if (col.is_child) parentHasChild.set(col.parent, col.name);
   }
 
+  const matchable = new Set(_matchableColumns(group, parentHasChild).map(c => c.name));
+  const targets = _matchTargets();
+  const cfg = _currentMatchConfig();
+
   for (const col of group.property_columns) {
     if (col.is_child) continue;
+
+    // Matched columns render their own matched/extras layout (standalone only).
+    if (matchable.has(col.name) && cfg[col.name]) {
+      dimensionColumns.appendChild(_buildMatchedColumn(col, group, cfg[col.name]));
+      continue;
+    }
+
     const wrapper = document.createElement('div');
     wrapper.className = 'flex flex-col gap-1';
+    // Standalone matchable columns that are not themselves a target get a selector.
+    if (matchable.has(col.name) && !targets.has(col.name)) {
+      wrapper.appendChild(_buildMatchSelector(col, group, matchable, targets, cfg));
+    }
     wrapper.appendChild(
       _buildCheckboxColumn(col.name, col.values, col.seed_value, state.dimSelections, group.articles)
     );
