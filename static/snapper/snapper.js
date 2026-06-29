@@ -771,6 +771,17 @@ function _buildChildColumn(col, articles = []) {
   });
   el.querySelectorAll('.child-check').forEach(cb => cb.addEventListener('change', onDimensionChange));
 
+  // Manual matching: a child whose parent is unmatched may match another eligible child.
+  const group = currentSeed.groups[currentGroupIndex];
+  const parentHasChild = _parentHasChildMap(group);
+  const cfg = _currentMatchConfig();
+  const targets = _matchTargets();
+  const parentMatched = col.parent && !!cfg[col.parent];
+  if (!parentMatched && !targets.has(col.name)) {
+    const selector = _buildMatchSelector(col, group, parentHasChild, cfg);
+    if (selector.innerHTML) el.insertBefore(selector, el.firstChild.nextSibling);
+  }
+
   return el;
 }
 
