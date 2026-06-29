@@ -295,11 +295,18 @@ function _saveGroupState() {
 }
 
 // ── Property value matching ("Match to…") ───────────────────────────────────────
-function _matchableColumns(group, parentHasChild) {
-  // Standalone columns only: not a child, not a parent.
-  return group.property_columns.filter(
-    c => !c.is_child && !parentHasChild.has(c.name)
-  );
+function _colKind(col, parentHasChild) {
+  if (col.is_child) return 'child';
+  if (parentHasChild.has(col.name)) return 'parent';
+  return 'standalone';
+}
+
+function _parentHasChildMap(group) {
+  const m = new Map();
+  for (const col of group.property_columns) {
+    if (col.is_child) m.set(col.parent, col.name);
+  }
+  return m;
 }
 
 function _currentMatchConfig() {
@@ -307,20 +314,27 @@ function _currentMatchConfig() {
 }
 
 function _matchTargets() {
-  // Set of property names currently used as a match target (match_to).
+  // Names currently used as a match target (so they don't also offer a source selector).
   const cfg = _currentMatchConfig();
   return new Set(Object.values(cfg).map(m => m.matchTo));
 }
 
-function _buildMatchSelector(col, group, matchable, targets, cfg) {
-  const colIndex = group.property_columns.findIndex(c => c.name === col.name);
-  const options = group.property_columns
-    .filter((c, i) =>
-      i < colIndex &&            // earlier than this column
-      matchable.has(c.name) &&   // standalone
-      !cfg[c.name] &&            // target is not itself matched (no chains)
-      c.name !== col.name)
-    .map(c => `<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)}</option>`)
+function _eligibleTargets(col, group, parentHasChild, cfg) {
+  const kind = _colKind(col, parentHasChild);
+  return group.property_columns.filter(c => {
+    if (c.name === col.name) return false;   // not itself
+    if (cfg[c.name]) return false;           // target must be unmatched (no chains)
+    const cKind = _colKind(c, parentHasChild);
+    if (kind === 'standalone') return cKind === 'standalone';
+    if (kind === 'parent')     return cKind === 'parent';     // both have a child
+    if (kind === 'child')      return cKind === 'child';
+    return false;
+  }).map(c => c.name);
+}
+
+function _buildMatchSelector(col, group, parentHasChild, cfg) {
+  const options = _eligibleTargets(col, group, parentHasChild, cfg)
+    .map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)
     .join('');
   const sel = document.createElement('div');
   sel.className = 'mb-2';
@@ -330,7 +344,7 @@ function _buildMatchSelector(col, group, matchable, targets, cfg) {
                  data-prop="${escapeHtml(col.name)}">
            <option value="">Not matched</option>${options}
          </select></label>`
-    : '';  // nothing earlier to match to -> no selector
+    : '';  // nothing eligible -> no selector
   const select = sel.querySelector('.match-select');
   if (select) {
     select.value = cfg[col.name]?.matchTo || '';
