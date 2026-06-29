@@ -368,6 +368,43 @@ def expand_permutations_with_children(
     return expanded
 
 
+def apply_matches(
+    permutations: list[dict],
+    match_resolutions: dict[str, dict],
+    selected_properties: dict[str, list[str]],
+) -> list[dict]:
+    """See module docs / plan for the contract. Lockstep + anchor-bound extras."""
+    if not match_resolutions:
+        return permutations
+
+    # 1. Lockstep: copy each target value onto its matched property.
+    locked: list[dict] = []
+    for perm in permutations:
+        props = dict(perm["properties"])
+        for matched_prop, mr in match_resolutions.items():
+            target_val = props.get(mr["match_to"])
+            if target_val is not None and target_val in mr["matched_values"]:
+                props[matched_prop] = target_val
+            # else: matched_prop left absent (pCon default)
+        locked.append({"article": perm["article"], "properties": props})
+
+    # 2. Extras: each rides the anchor (first selected target value) slice.
+    extra_rows: list[dict] = []
+    for matched_prop, mr in match_resolutions.items():
+        selected = selected_properties.get(mr["match_to"], [])
+        if not selected:
+            continue  # no anchor available -> skip extras for this column
+        anchor = selected[0]
+        for extra_val in mr["extras"]:
+            for base in locked:
+                if base["properties"].get(mr["match_to"]) == anchor:
+                    new_props = dict(base["properties"])
+                    new_props[matched_prop] = extra_val
+                    extra_rows.append({"article": base["article"], "properties": new_props})
+
+    return locked + extra_rows
+
+
 @router.post("/generate")
 def generate_obx(req: GenerateRequest):
     """
