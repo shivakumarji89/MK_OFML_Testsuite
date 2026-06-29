@@ -99,3 +99,52 @@ def test_no_anchor_when_target_not_selected_skips_extras():
     result = apply_matches(perms, match, {})  # Worktop not in selected_properties
     assert len(result) == 1  # lockstep only, no extra (no anchor)
     assert result[0]["properties"]["Edge"] == "oak"
+
+
+def test_child_target_lockstep_copies_colour():
+    """A matched colour copies the (already-expanded) target colour per permutation."""
+    perms = [
+        {"article": "A1", "properties": {"Shell_Type": "1HA", "Shell_Colour": "1HA01"}},
+        {"article": "A1", "properties": {"Shell_Type": "1HA", "Shell_Colour": "1HA02"}},
+    ]
+    match = {"Seat_Colour": {"match_to": "Shell_Colour",
+                            "matched_values": ["1HA01", "1HA02"], "extras": []}}
+    result = apply_matches(perms, match, {"Shell_Type": ["1HA"]})
+    assert len(result) == 2
+    assert all(p["properties"]["Seat_Colour"] == p["properties"]["Shell_Colour"]
+               for p in result)
+
+
+def test_parent_and_child_pair_lockstep_identical_fabric():
+    """Matching type+colour together yields identical seat/shell fabric, no extras."""
+    perms = [
+        {"article": "A1", "properties": {"Shell_Type": "1HA", "Shell_Colour": "1HA01"}},
+        {"article": "A1", "properties": {"Shell_Type": "1HA", "Shell_Colour": "1HA02"}},
+        {"article": "A1", "properties": {"Shell_Type": "2AB", "Shell_Colour": "2AB01"}},
+    ]
+    match = {
+        "Seat_Type":   {"match_to": "Shell_Type",
+                        "matched_values": ["1HA", "2AB"], "extras": []},
+        "Seat_Colour": {"match_to": "Shell_Colour",
+                        "matched_values": ["1HA01", "1HA02", "2AB01"], "extras": []},
+    }
+    result = apply_matches(perms, match, {"Shell_Type": ["1HA", "2AB"]})
+    assert len(result) == 3  # no extras -> count unchanged
+    for p in result:
+        assert p["properties"]["Seat_Type"] == p["properties"]["Shell_Type"]
+        assert p["properties"]["Seat_Colour"] == p["properties"]["Shell_Colour"]
+
+
+def test_validity_filter_omits_colour_not_in_target_set():
+    """A target colour absent from the matched property's matched_values is left absent."""
+    perms = [
+        {"article": "A1", "properties": {"Shell_Type": "1HA", "Shell_Colour": "1HA01"}},
+        {"article": "A1", "properties": {"Shell_Type": "1HA", "Shell_Colour": "1HA09"}},
+    ]
+    # Seat only carries 1HA01 (1HA09 does not exist as a seat colour)
+    match = {"Seat_Colour": {"match_to": "Shell_Colour",
+                            "matched_values": ["1HA01"], "extras": []}}
+    result = apply_matches(perms, match, {"Shell_Type": ["1HA"]})
+    by_shell = {p["properties"]["Shell_Colour"]: p["properties"] for p in result}
+    assert by_shell["1HA01"]["Seat_Colour"] == "1HA01"
+    assert "Seat_Colour" not in by_shell["1HA09"]  # omitted -> pCon default
