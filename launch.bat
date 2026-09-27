@@ -11,13 +11,13 @@ if not exist .venv (
 )
 
 :: Open browser after 3s delay in a background cmd (non-blocking)
-start /b cmd /c "timeout /t 3 /nobreak >nul && start http://localhost:8080"
+start /b cmd /c "timeout /t 3 /nobreak >nul && start http://localhost:8090"
 
 :: Run server in foreground so closing the window kills it
 .venv\Scripts\python main.py
 if errorlevel 1 (
     echo.
-    echo ERROR: The server failed to start. Port 8080 may already be in use.
+    echo ERROR: The server failed to start. Port 8090 may already be in use.
     echo Close any other running instances and try again.
     pause
 )

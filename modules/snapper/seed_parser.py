@@ -1,3 +1,4 @@
+import copy
 import xml.etree.ElementTree as ET
 
 
@@ -38,7 +39,13 @@ def parse_seed(xml_string: str) -> dict:
     except ET.ParseError as e:
         raise SeedParseError(f"Invalid XML: {e}") from e
 
-    article_elements = root.findall(".//bskArticle")
+    items_el = root.find("items")
+    if items_el is None:
+        raise SeedParseError("No <items> element found in OBX")
+
+    # Only top-level articles — subItem children are nested inside their parent
+    # and must not be treated as separate articles.
+    article_elements = items_el.findall("bskArticle")
     if not article_elements:
         raise SeedParseError("No <bskArticle> element found in OBX")
 
@@ -74,7 +81,7 @@ def parse_seed(xml_string: str) -> dict:
 
         properties = _parse_varcode(varcode_str)
         label = _extract_short_description(article_el)
-        article_xml = ET.tostring(article_el, encoding="unicode")
+        article_xml = ET.tostring(_strip_child_items(article_el), encoding="unicode")
 
         articles.append({
             "article": article_code,
@@ -90,6 +97,38 @@ def parse_seed(xml_string: str) -> dict:
         "info_messages": info_messages,
         "raw_xml": xml_string,
     }
+
+
+def _strip_child_items(article_el: ET.Element) -> ET.Element:
+    """
+    Return a copy of a bskArticle element with all child-article structure removed.
+
+    Removes:
+    - Nested <bskArticle subItem="1"> elements (the child articles themselves)
+    - <subArticle> forward-pointer elements (would be dangling after child removal)
+    - <addStateCode type="ChildProps" aggr="1"> (aggregated child property state)
+    - <propVarCode aggr="1"> (aggregated varcode across parent + children)
+    - <geometryChecksum aggr="1"> (aggregated geometry hash)
+
+    Everything else on the parent is self-contained and valid for use as a seed
+    template — pCon re-derives child state from the ofmlvarcode on Update.
+    """
+    el = copy.deepcopy(article_el)
+
+    for child in list(el):
+        tag = child.tag
+        if tag == "bskArticle":
+            el.remove(child)
+        elif tag == "subArticle":
+            el.remove(child)
+        elif tag == "addStateCode" and child.get("aggr") == "1":
+            el.remove(child)
+        elif tag == "propVarCode" and child.get("aggr") == "1":
+            el.remove(child)
+        elif tag == "geometryChecksum" and child.get("aggr") == "1":
+            el.remove(child)
+
+    return el
 
 
 def _extract_short_description(article_el: ET.Element) -> str | None:
